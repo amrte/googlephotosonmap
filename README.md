@@ -2,7 +2,11 @@
 
 See your Google Photos on a map. Photo Atlas is a single HTML file: open it in a
 browser, add your Google Takeout export and every photo with a location appears
-where it was taken.
+where it was taken. Connect Strava and your runs, rides and hikes appear too,
+each with the photos you took along the way.
+
+It lives at <https://amrte.github.io/googlephotosonmap/>. The current release is
+`photoatlas_v0.1.html`.
 
 Nothing is uploaded. The browser reads your files on your own computer; only the
 map background and the page's libraries come from the internet.
@@ -18,8 +22,9 @@ reads.
 
 ## Getting started
 
-1. Download `index.html` and open it in Chrome, Edge, Firefox or Safari
-   (double-click is enough).
+1. Open <https://amrte.github.io/googlephotosonmap/> in Chrome, Edge, Firefox
+   or Safari. You can also download `photoatlas_v0.1.html` and double-click it;
+   everything except Google Drive and Strava works that way too.
 2. Go to [takeout.google.com](https://takeout.google.com/), click
    **Deselect all**, tick **Google Photos**, then **Next step**. Choose the
    largest file size (50 GB) to get as few ZIP files as possible.
@@ -40,8 +45,9 @@ described under [Google Drive setup](#google-drive-setup).
 - **Map.** Photos cluster into small stacks with a count. Zoom in and they split
   into single prints; photos taken at exactly the same spot fan out.
   Switch between a minimal map, streets and satellite.
-- **Timeline.** A bar per month shows when your photos were taken. Drag across
-  it to show one period only.
+- **Dates.** A bar per month shows when your photos were taken. Drag across it
+  to show whole months, or pick exact start and end dates (one day works too).
+  The range narrows the photos and the activities alike.
 - **Albums.** Filter by any album from your library.
 - **Devices.** Filter by the phone or camera a photo was taken with. The names
   come from each photo's EXIF data, which is read in the background after the
@@ -51,6 +57,10 @@ described under [Google Drive setup](#google-drive-setup).
 - **Viewer.** Date, coordinates, album, people, description and camera, with
   links to the photo in Google Photos and the place in Google Maps.
 - **No location.** Photos without GPS data are counted and listed separately.
+- **Strava activities.** Tracks on the map, coloured by sport, and an Activities
+  tab listing the ones in view. Open an activity to see the photos taken during
+  it; open a photo to jump to its activity. Photos taken during an activity get
+  a ring in the sport's colour, and "During activities" shows only those.
 
 ## What it understands
 
@@ -78,6 +88,12 @@ described under [Google Drive setup](#google-drive-setup).
 - Browsers other than Safari have to convert HEIC photos themselves, which takes
   a moment per photo.
 - Very large libraries (100,000+ photos) need a computer with plenty of memory.
+- Photos count as taken during an activity from five minutes before its start to
+  five minutes after its end. Google's metadata gives every photo's exact
+  moment; for photos that only have EXIF, the time zone comes from the photo when
+  the camera recorded it, and from this computer otherwise.
+- Strava hands out simplified tracks with its activity list, which is plenty for
+  the map; "View on Strava" shows the full one.
 - From Google Drive, each photo's details are a separate small download, so a big
   library takes a few minutes to load. Thumbnails use the small preview stored
   inside each photo, so they are a little softer, and videos get none. Device
@@ -136,7 +152,7 @@ costs nothing.
 
 The client ID isn't a secret; it only works from the addresses you listed.
 Photo Atlas keeps it in your browser. To avoid pasting it on every device, put
-it into `GOOGLE_CLIENT_ID` near the top of the script in `index.html`.
+it into `GOOGLE_CLIENT_ID` near the top of the script in `photoatlas_v0.1.html`.
 
 Google signs you in for an hour at a time. If that runs out while you browse,
 Photo Atlas asks you to sign in again and carries on where it was.
@@ -144,6 +160,52 @@ Photo Atlas asks you to sign in again and carries on where it was.
 To run it from your own computer instead of GitHub Pages, start
 `python3 -m http.server 8000` in the folder with `index.html`, add
 `http://localhost:8000` as a second JavaScript origin and open that address.
+
+## Strava setup
+
+Strava lets each person connect their own small "API application". It's free
+and takes about five minutes, once.
+
+1. Open <https://www.strava.com/settings/api> and create an application. Any
+   name, category and website will do (for example "Photo Atlas",
+   "Visualizer" and <https://amrte.github.io/googlephotosonmap/>). Strava also
+   asks for an icon; any small picture works.
+2. Set **Authorization Callback Domain** to `amrte.github.io`.
+3. Open Photo Atlas at <https://amrte.github.io/googlephotosonmap/>, click
+   **Strava** and copy the **Client ID** and **Client Secret** from Strava's page
+   into the two fields.
+4. Click **Connect with Strava** and approve in the window that opens. Your
+   activities load, and on this browser they load again by themselves next
+   time.
+
+The Client ID and Secret and the Strava sign-in are kept in your browser only;
+**Disconnect Strava** in the same dialog removes the sign-in. Photo Atlas only
+reads, and asks Strava for 200 activities at a time, so even thousands of
+activities stay far below Strava's limit of 100 requests per 15 minutes.
+
+Connecting happens straight from your browser, with no server in between. If
+Strava ever stops allowing that, connecting ends with a message saying the
+browser blocked Strava's answer.
+
+## Versions
+
+Every release is a new file, `photoatlas_vX.Y.html`, and the number goes up by
+0.1 each time. `index.html` only forwards to the newest one, so the address
+above always opens the current release. `python3 tools/bump.py` moves the
+number on.
+
+## Tests
+
+`tests/` runs the real page in a headless browser: local files, Google Drive
+and Strava, the last two against stand-ins for Google and Strava.
+
+```
+cd tests
+pip install pillow piexif
+npm install
+python3 make_fixture.py
+npm test
+```
 
 ## Built with
 

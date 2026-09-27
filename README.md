@@ -126,8 +126,9 @@ costs nothing.
 
 ### 3. Sign in
 
-1. Open <https://amrte.github.io/googlephotosonmap/>, click
-   **Add photos → From Google Drive** and paste the client ID.
+1. Open <https://amrte.github.io/googlephotosonmap/> and click
+   **Add photos → From Google Drive**. This copy has its client ID built in;
+   with a client of your own, paste its ID there.
 2. Click **Sign in with Google**. Google warns that it hasn't verified the app,
    which is expected for your own app in testing: choose **Continue** and allow
    access to Drive.

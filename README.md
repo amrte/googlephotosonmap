@@ -2,11 +2,11 @@
 
 See your Google Photos on a map. Photo Atlas is a single HTML file: open it in a
 browser, add your Google Takeout export and every photo with a location appears
-where it was taken. Connect Strava and your runs, rides and hikes appear too,
-each with the photos you took along the way.
+where it was taken. Add your Strava activities and your runs, rides and hikes
+appear too, each with the photos you took along the way.
 
 It lives at <https://amrte.github.io/googlephotosonmap/>. The current release is
-`photoatlas_v0.1.html`.
+`photoatlas_v0.2.html`.
 
 Nothing is uploaded. The browser reads your files on your own computer; only the
 map background and the page's libraries come from the internet.
@@ -23,7 +23,7 @@ reads.
 ## Getting started
 
 1. Open <https://amrte.github.io/googlephotosonmap/> in Chrome, Edge, Firefox
-   or Safari. You can also download `photoatlas_v0.1.html` and double-click it;
+   or Safari. You can also download `photoatlas_v0.2.html` and double-click it;
    everything except Google Drive and Strava works that way too.
 2. Go to [takeout.google.com](https://takeout.google.com/), click
    **Deselect all**, tick **Google Photos**, then **Next step**. Choose the
@@ -57,10 +57,13 @@ described under [Google Drive setup](#google-drive-setup).
 - **Viewer.** Date, coordinates, album, people, description and camera, with
   links to the photo in Google Photos and the place in Google Maps.
 - **No location.** Photos without GPS data are counted and listed separately.
-- **Strava activities.** Tracks on the map, coloured by sport, and an Activities
+- **Strava activities.** From Strava's free data export or, for subscribers,
+  straight from Strava. Tracks on the map, coloured by sport, and an Activities
   tab listing the ones in view. Open an activity to see the photos taken during
   it; open a photo to jump to its activity. Photos taken during an activity get
   a ring in the sport's colour, and "During activities" shows only those.
+  Photos without GPS that were taken during an exported activity are placed
+  on its track, where you were at that moment.
 
 ## What it understands
 
@@ -80,6 +83,8 @@ described under [Google Drive setup](#google-drive-setup).
   folder are left out.
 - JPEG, PNG, WebP, GIF, AVIF, HEIC (converted in the browser when needed),
   videos, and a preview for RAW files where one is embedded.
+- Strava exports, zipped or not: `activities.csv` and the FIT, GPX and TCX
+  files next to it, gzipped or plain. Recognised wherever you add or drop them.
 
 ## Limits
 
@@ -92,8 +97,11 @@ described under [Google Drive setup](#google-drive-setup).
   five minutes after its end. Google's metadata gives every photo's exact
   moment; for photos that only have EXIF, the time zone comes from the photo when
   the camera recorded it, and from this computer otherwise.
-- Strava hands out simplified tracks with its activity list, which is plenty for
-  the map; "View on Strava" shows the full one.
+- A Strava export is a snapshot; for newer activities, request a new one.
+  Activities without a GPS file (manual entries, some indoor workouts) take their
+  start time from `activities.csv`.
+- Through the API, Strava hands out simplified tracks without times: fine for
+  the map, but photos without GPS can only be placed on tracks from an export.
 - From Google Drive, each photo's details are a separate small download, so a big
   library takes a few minutes to load. Thumbnails use the small preview stored
   inside each photo, so they are a little softer, and videos get none. Device
@@ -152,7 +160,7 @@ costs nothing.
 
 The client ID isn't a secret; it only works from the addresses you listed.
 Photo Atlas keeps it in your browser. To avoid pasting it on every device, put
-it into `GOOGLE_CLIENT_ID` near the top of the script in `photoatlas_v0.1.html`.
+it into `GOOGLE_CLIENT_ID` near the top of the script in `photoatlas_v0.2.html`.
 
 Google signs you in for an hour at a time. If that runs out while you browse,
 Photo Atlas asks you to sign in again and carries on where it was.
@@ -163,8 +171,28 @@ To run it from your own computer instead of GitHub Pages, start
 
 ## Strava setup
 
-Strava lets each person connect their own small "API application". It's free
-and takes about five minutes, once.
+### From Strava's data export (free, for every account)
+
+1. On strava.com open **Settings → My Account → Download or Delete Your
+   Account**, click **Get Started** and then **Request Your Archive**.
+   Despite the page's name, this deletes nothing. Strava emails a download
+   link, usually within a few hours.
+2. Download the ZIP. No need to unzip it.
+3. In Photo Atlas click **Strava → Choose the export ZIP**, or simply drop the
+   ZIP on the page. An unzipped export folder works as well.
+
+The export is read on your computer and works from the downloaded file too.
+Every activity's own GPS file has a time for each point, which is what lets
+Photo Atlas place your photos without GPS on the track.
+
+### Through the Strava API (Strava subscribers)
+
+Since June 2026 Strava opens its API only to people with a Strava subscription
+([announcement](https://communityhub.strava.com/insider-journal-9/an-update-to-our-developer-program-13428)).
+With one, Photo Atlas can load your activities straight from Strava, and again
+by itself on every visit. In the Strava dialog, choose **Have a Strava
+subscription? Connect through the Strava API**. Strava lets each person connect
+their own small "API application"; setting it up takes about five minutes, once.
 
 1. Open <https://www.strava.com/settings/api> and create an application. Any
    name, category and website will do (for example "Photo Atlas",
@@ -196,8 +224,9 @@ number on.
 
 ## Tests
 
-`tests/` runs the real page in a headless browser: local files, Google Drive
-and Strava, the last two against stand-ins for Google and Strava.
+`tests/` runs the real page in a headless browser: local files, Google Drive,
+the Strava API (both against stand-ins for Google and Strava) and a Strava
+export.
 
 ```
 cd tests

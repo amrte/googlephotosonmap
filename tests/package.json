@@ -4,7 +4,7 @@
   "description": "Browser tests for Photo Atlas: the real page in headless Chromium, with the CDN libraries served from npm and Google and Strava replaced by mocks.",
   "scripts": {
     "fixture": "python3 make_fixture.py",
-    "test": "node local.test.cjs && node drive.test.cjs && node strava.test.cjs"
+    "test": "node local.test.cjs && node drive.test.cjs && node strava.test.cjs && node strava-export.test.cjs"
   },
   "devDependencies": {
     "@zip.js/zip.js": "2.7.57",

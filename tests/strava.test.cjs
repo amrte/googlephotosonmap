@@ -1,4 +1,5 @@
-// Strava: sign-in through the pop-up, activities with tracks, and matching photos by time.
+// Strava's API (subscribers only): sign-in through the pop-up, activities with tracks, and
+// matching photos by time.
 // Strava itself is replaced by a mock that plays its OAuth and API parts.
 const path = require('path');
 const { FX, PAGE, routeAll, launch, serve, checker, same, sorted, shot } = require('./common.cjs');
@@ -94,6 +95,8 @@ async function strava(route, url) {
   await page.waitForFunction(() => !S.busy && S.items.length > 0, null, { timeout: 30000 });
 
   await page.click('#btn-strava');
+  t.check('the dialog opens on the free export route', /Request Your Archive/.test(await page.textContent('#sv-body')));
+  await page.click('#sv-api');
   await page.waitForSelector('#sv-id');
   await page.fill('#sv-id', '12345');
   await page.fill('#sv-secret', 'abc');

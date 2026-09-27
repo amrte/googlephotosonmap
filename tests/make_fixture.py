@@ -98,3 +98,100 @@ for files, root in ((z1, 'extracted/takeout-001'), (z2, 'extracted/takeout-002')
         p = os.path.join(root, k); os.makedirs(os.path.dirname(p), exist_ok=True); open(p, 'wb').write(v)
 im = Image.new('RGB', (256, 256), (222, 226, 233)); d = ImageDraw.Draw(im); d.rectangle([0, 0, 255, 255], outline=(205, 210, 219)); im.save('tile.png')
 print('ok')
+
+
+# ---------------------------------------------------------------------------
+# A Strava export: activities.csv plus FIT, GPX and gzipped TCX tracks, like
+# Strava's "Request Your Archive". Times are UTC.
+# ---------------------------------------------------------------------------
+import calendar
+import csv
+import gzip
+import struct
+import time as _time
+
+FIT_EPOCH = 631065600
+
+
+def unix(s):
+    return calendar.timegm(_time.strptime(s, '%Y-%m-%dT%H:%M:%SZ'))
+
+
+def iso(t):
+    return _time.strftime('%Y-%m-%dT%H:%M:%SZ', _time.gmtime(t))
+
+
+def along(lat, lng, secs, step, v=0.00001):
+    # Moves north-east at a steady pace: position = start + v * seconds.
+    return [(lat + v * t, lng + v * t, t) for t in range(0, secs + 1, step)]
+
+
+def fit_file(start, pts, compressed_from=None, sport=1):
+    semi = lambda d: int(round(d * 2 ** 31 / 180))
+    out = bytearray()
+    # local 0: record with timestamp, lat, long
+    out += bytes([0x40, 0, 0]) + struct.pack('<H', 20) + bytes([3, 253, 4, 0x86, 0, 4, 0x85, 1, 4, 0x85])
+    # local 2: record without timestamp, for compressed-timestamp headers
+    out += bytes([0x42, 0, 0]) + struct.pack('<H', 20) + bytes([2, 0, 4, 0x85, 1, 4, 0x85])
+    for lat, lng, dt in pts:
+        ts = start - FIT_EPOCH + dt
+        if compressed_from is not None and dt >= compressed_from:
+            out += bytes([0x80 | (2 << 5) | (ts & 0x1F)]) + struct.pack('<ii', semi(lat), semi(lng))
+        else:
+            out += bytes([0x00]) + struct.pack('<Iii', ts, semi(lat), semi(lng))
+    # local 1: session with timestamp and sport
+    out += bytes([0x41, 0, 0]) + struct.pack('<H', 18) + bytes([2, 253, 4, 0x86, 5, 1, 0x00])
+    out += bytes([0x01]) + struct.pack('<IB', start - FIT_EPOCH + pts[-1][2], sport)
+    return struct.pack('<BBHI4s', 12, 0x10, 2100, len(out), b'.FIT') + bytes(out) + b'\x00\x00'
+
+
+def gpx_file(start, pts):
+    rows = ''.join(f'<trkpt lat="{la:.6f}" lon="{lo:.6f}"><time>{iso(start + t)}</time></trkpt>' for la, lo, t in pts)
+    return (f'<?xml version="1.0"?><gpx creator="StravaGPX" version="1.1" xmlns="http://www.topografix.com/GPX/1/1">'
+            f'<trk><name>Porto</name><type>running</type><trkseg>{rows}</trkseg></trk></gpx>').encode()
+
+
+def tcx_file(start, pts):
+    rows = ''.join(f'<Trackpoint><Time>{iso(start + t)}</Time><Position><LatitudeDegrees>{la:.6f}</LatitudeDegrees>'
+                   f'<LongitudeDegrees>{lo:.6f}</LongitudeDegrees></Position></Trackpoint>' for la, lo, t in pts)
+    return (f'<?xml version="1.0"?><TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">'
+            f'<Activities><Activity Sport="Biking"><Lap><Track>{rows}</Track></Lap></Activity></Activities></TrainingCenterDatabase>').encode()
+
+
+S_WALK = unix('2021-08-14T12:00:00Z')
+S_RUN = unix('2021-08-15T12:10:00Z')
+S_RIDE = unix('2022-05-01T08:00:00Z')
+S_LATE = unix('2021-08-14T13:10:00Z')
+strava = {
+    'activities/201.fit.gz': gzip.compress(fit_file(S_WALK, along(38.70, -9.16, 3600, 60), sport=11)),
+    'activities/202.gpx': gpx_file(S_RUN, along(41.15, -8.63, 1200, 60)),
+    'activities/203.tcx.gz': gzip.compress(tcx_file(S_RIDE, along(48.13, 11.56, 1800, 60))),
+    # Compressed timestamps from minute 20 on, every 30 seconds.
+    'activities/205.fit': fit_file(S_LATE, along(38.72, -9.15, 1140, 60) + along(38.72, -9.15, 1800, 30)[39:], compressed_from=1170, sport=11),
+    'media/strava-upload.jpg': jpg((10, 10, 10), 'photo uploaded to Strava', gps=(10.0, 10.0)),
+    'profile.csv': b'Athlete ID,Email\n1,someone@example.com\n',
+}
+head = ['Activity ID', 'Activity Date', 'Activity Name', 'Activity Type', 'Activity Description', 'Elapsed Time', 'Distance',
+        'Max Heart Rate', 'Relative Effort', 'Commute', 'Activity Private Note', 'Activity Gear', 'Filename', 'Athlete Weight',
+        'Bike Weight', 'Elapsed Time', 'Moving Time', 'Distance', 'Max Speed', 'Average Speed', 'Elevation Gain', 'Elevation Loss']
+def row(aid, date, name, kind, desc, secs, km, fname, moving, climb):
+    return [aid, date, name, kind, desc, str(secs), f'{km:.2f}', '', '', 'false', '', '', fname, '', '', f'{secs:.1f}',
+            f'{moving:.1f}', f'{km * 1000:.1f}', '', '', f'{climb:.1f}', '']
+buf = io.StringIO()
+w = csv.writer(buf, lineterminator='\n')
+w.writerow(head)
+w.writerow(row('201', 'Aug 14, 2021, 12:00:00 PM', 'Lisbon walk', 'Walk', '', 3600, 4.2, 'activities/201.fit.gz', 3300, 12))
+w.writerow(row('202', 'Aug 15, 2021, 12:10:00 PM', 'Porto run, with a comma', 'Run', 'A "fast" one,\nover two lines', 1200, 3.2, 'activities/202.gpx', 1150, 20))
+w.writerow(row('203', 'May 1, 2022, 8:00:00 AM', 'Munich ride', 'Ride', '', 1800, 11.8, 'activities/203.tcx.gz', 1700, 40))
+w.writerow(row('204', 'Jan 1, 2023, 10:00:00 AM', 'Gym', 'Weight Training', '', 3000, 0, '', 2800, 0))
+w.writerow(row('205', 'Aug 14, 2021, 1:10:00 PM', 'Afternoon walk', 'Walk', '', 1800, 1.9, 'activities/205.fit', 1700, 5))
+strava['activities.csv'] = buf.getvalue().encode()
+
+with zipfile.ZipFile('strava-export.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+    for k, v in strava.items():
+        z.writestr(zipfile.ZipInfo(k, (2025, 1, 1, 0, 0, 0)), v, compress_type=zipfile.ZIP_DEFLATED)
+for k, v in strava.items():
+    p = os.path.join('strava-extracted', 'export_4711', k)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, 'wb').write(v)
+print('strava export ok')

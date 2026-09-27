@@ -507,7 +507,7 @@
   .lb dl { display: grid; gap: 12px; margin: 0; }
   .lb dt { margin-bottom: 3px; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: #8C92A2; }
   .lb dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
-  .lb dd.mono { font: 13px/1.5 var(--font-mono); }
+  .lb dd.mono { font: 13px/1.5 var(--font-mono); white-space: pre-line; }
   .lb .tags { display: flex; flex-wrap: wrap; gap: 5px; }
   .lb .tags span { padding: 2px 9px; border-radius: 999px; background: #1F2330; font-size: 12.5px; }
   .lb-links { display: grid; gap: 8px; margin-top: auto; padding-top: 6px; }
@@ -881,7 +881,7 @@
   </aside>
 </div>
 
-<div class="drop" id="drop" hidden><div>Drop to add to the map<small>Takeout ZIP files, folders or photos</small></div></div>
+<div class="drop" id="drop" hidden><div>Drop to add to the map<small>Takeout ZIP files, folders, photos or your Strava export</small></div></div>
 <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
 <div class="reauth" id="reauth" hidden role="alert"><span>Your Google sign-in has run out. Photo Atlas needs it to keep reading from Drive.</span><button class="btn primary" id="reauth-btn" type="button">Sign in again</button></div>
 
@@ -915,7 +915,7 @@ const HEAD_DEVICE = 49152;
 const HEAD_PREVIEW = 65536;
 
 // Release number; tools/bump.py raises it by 0.1 together with the file name.
-const VERSION = '0.1';
+const VERSION = '0.2';
 
 // Strava. Everyone registers their own small API application (see README); its ID and
 // secret stay in this browser.
@@ -926,11 +926,11 @@ const STRAVA_APPS = 'https://www.strava.com/settings/api';
 // A photo counts as taken during an activity up to this long before its start or after its end.
 const ACTIVITY_SLACK = 5 * 60 * 1000;
 const SPORTS = [
-  { key: 'run', re: /run/i },
-  { key: 'ride', re: /ride|cycl|bike|velomobile|handcycle/i },
-  { key: 'foot', re: /hike|walk|snowshoe/i },
-  { key: 'snow', re: /ski|snowboard|skate/i },
-  { key: 'water', re: /swim|row|kayak|canoe|surf|sail|paddl/i },
+  { key: 'snow', re: /ski|snowboard|skate|langlauf/i },
+  { key: 'run', re: /run|lauf/i },
+  { key: 'ride', re: /ride|cycl|bike|velomobile|handcycle|radfahrt|rad\b/i },
+  { key: 'foot', re: /hike|walk|snowshoe|wander|spazier/i },
+  { key: 'water', re: /swim|schwimm|row|ruder|kayak|kajak|canoe|kanu|surf|sail|segel|paddl/i },
 ];
 const SPORT_COLOR = { run: '#F76707', ride: '#1098AD', foot: '#37B24D', snow: '#7950F2', water: '#1C7ED6', other: '#868E96' };
 const sportKey = s => (SPORTS.find(x => x.re.test(s)) || { key: 'other' }).key;
@@ -1118,10 +1118,13 @@ function fileItem(file, path) {
   };
 }
 
-async function zipItems(file) {
+async function zipEntries(file) {
   if (typeof zip === 'undefined') throw new Error('the ZIP reader did not load. Check your connection and reload the page');
-  const reader = new zip.ZipReader(new zip.BlobReader(file));
-  const entries = await reader.getEntries();
+  return new zip.ZipReader(new zip.BlobReader(file)).getEntries();
+}
+
+async function zipItems(file, entries) {
+  if (!entries) entries = await zipEntries(file);
   const out = [];
   for (const e of entries) {
     if (e.directory) continue;
@@ -1343,13 +1346,43 @@ async function rebuild() {
    Adding files
    ====================================================================== */
 
-function addFiles(list) {
-  const zips = list.filter(x => /\.zip$/i.test(x.file.name)).map(x => ({
-    name: x.file.name, open: () => zipItems(x.file), hint: ' It may still be downloading or be damaged.',
-  }));
-  const plain = list.filter(x => !/\.zip$/i.test(x.file.name) && kindOf(x.file.name)).map(x => fileItem(x.file, x.path));
-  if (!zips.length && !plain.length) { toast('None of those are photos or Takeout ZIP files.'); return; }
-  return addSources(zips, plain);
+// Takeout ZIPs, folders and photos go to the photo import; a Strava export (a ZIP or
+// folder with activities.csv) is recognised wherever it turns up and goes to the activities.
+async function addFiles(list) {
+  if (S.busy) return;
+  showProgress();
+  progress('Opening the files', 0, 0);
+  const isZip = x => /\.zip$/i.test(x.file.name);
+  let rest = list.filter(x => !isZip(x));
+  const exports = [];
+  const csv = rest.find(x => STRAVA_CSV_RE.test(x.path || x.file.name));
+  if (csv) {
+    const at = csv.path || csv.file.name;
+    const root = at.slice(0, at.length - 'activities.csv'.length);
+    const mine = rest.filter(x => x === csv || ((x.path || '').startsWith(root + 'activities/') && STRAVA_FILE_RE.test(x.path)));
+    exports.push({ name: root.replace(/^\/|\/$/g, '') || 'Strava export', files: mine.map(x => ({ path: (x.path || x.file.name).slice(root.length), blob: async () => x.file })) });
+    // The export's media folder holds copies of photos uploaded to Strava; they don't belong on the map twice.
+    rest = rest.filter(x => !mine.includes(x) && !(root && (x.path || '').startsWith(root)));
+  }
+  const zips = [];
+  for (const x of list.filter(isZip)) {
+    const hint = ' It may still be downloading or be damaged.';
+    let entries;
+    try { entries = await zipEntries(x.file); } catch (err) { zips.push({ name: x.file.name, open: () => Promise.reject(err), hint }); continue; }
+    const c = entries.find(e => STRAVA_CSV_RE.test(e.filename));
+    if (c) {
+      const root = c.filename.slice(0, c.filename.length - 'activities.csv'.length);
+      const files = entries.filter(e => !e.directory && (e === c || (e.filename.startsWith(root + 'activities/') && STRAVA_FILE_RE.test(e.filename))));
+      exports.push({ name: x.file.name, files: files.map(e => ({ path: e.filename.slice(root.length), blob: () => e.getData(new zip.BlobWriter()) })) });
+    } else {
+      zips.push({ name: x.file.name, open: () => zipItems(x.file, entries), hint });
+    }
+  }
+  const plain = rest.filter(x => kindOf(x.file.name)).map(x => fileItem(x.file, x.path));
+  if (exports.length) await importStravaExports(exports);
+  if (zips.length || plain.length) return addSources(zips, plain);
+  $('#progress').hidden = true;
+  if (!exports.length) toast('None of those are photos, Takeout ZIP files or a Strava export.');
 }
 
 // zips: [{ name, open() -> items }] from this computer or from Google Drive.
@@ -2392,7 +2425,8 @@ function fillInfo(p) {
     wrap.append(dt, dd);
     rows.push(wrap);
   };
-  add('Place', p.lat != null ? fmtCoord(p.lat, p.lng) + (p.alt != null ? ` · ${Math.round(p.alt)} m` : '') : 'No location', 'mono');
+  add('Place', p.lat == null ? 'No location'
+    : fmtCoord(p.lat, p.lng) + (p.alt != null ? ` · ${Math.round(p.alt)} m` : '') + (p.fromTrack ? '\nfrom the Strava track at that moment' : ''), 'mono');
   add('Albums', [...p.albums]);
   add('People', p.people);
   add('Description', p.desc);
@@ -2833,8 +2867,9 @@ const ST = {
   clientId: store.get('strava-client-id') || '',
   secret: store.get('strava-secret') || '',
   tokens: readJSON(store.get('strava-tokens')),
-  state: 'idle', error: '', editing: false, count: 0,
+  state: 'idle', error: '', editing: false, count: 0, mode: '',
 };
+ST.mode = ST.tokens ? 'api' : 'export';
 
 function setActivities(list, demo) {
   ACT.list = list.sort((a, b) => a.start - b.start);
@@ -2847,8 +2882,16 @@ function setActivities(list, demo) {
   matchActivities();
 }
 
-// Each photo with a time goes to the activity that was running when it was taken.
+// Each photo with a time goes to the activity that was running when it was taken. Photos
+// without GPS then get the spot on the activity's track where it was at that moment, when
+// the track has times (Strava exports do; the API's simplified tracks don't).
 function matchActivities() {
+  const back = S.placed.filter(p => p.fromTrack);
+  if (back.length) {
+    for (const p of back) { p.lat = p.lng = null; p.fromTrack = false; }
+    S.placed = S.placed.filter(p => p.lat != null);
+    S.unplaced = S.unplaced.concat(back);
+  }
   const acts = ACT.list;
   for (const a of acts) a.photos = [];
   let found = 0;
@@ -2866,6 +2909,37 @@ function matchActivities() {
   }
   for (const a of acts) a.photos.sort((x, y) => x.t - y.t);
   if (!found) S.onlyAct = false;
+  const moved = [];
+  S.unplaced = S.unplaced.filter(p => {
+    const a = p.activity;
+    const at = a && a.timed && a.timed.length > 1 ? pointAt(a.timed, p.t) : null;
+    if (!at) return true;
+    p.lat = at[0];
+    p.lng = at[1];
+    p.fromTrack = true;
+    moved.push(p);
+    return false;
+  });
+  if (moved.length) S.placed = S.placed.concat(moved);
+}
+
+// Position on a timed track [[lat, lng, ms], ...] at time t, between the two nearest points.
+function pointAt(pts, t) {
+  if (t <= pts[0][2]) return pts[0];
+  const n = pts.length - 1;
+  if (t >= pts[n][2]) return pts[n];
+  let lo = 0, hi = n;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid][2] <= t) lo = mid; else hi = mid; }
+  const [a, b] = [pts[lo], pts[hi]];
+  const f = b[2] > a[2] ? (t - a[2]) / (b[2] - a[2]) : 0;
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+}
+
+// Activities from several places (the API, an export) merged by id; the later list wins.
+function mergeActs(...lists) {
+  const byId = new Map();
+  for (const list of lists) for (const a of list) byId.set(a.id, a);
+  return [...byId.values()];
 }
 
 const trackRenderer = L.canvas({ padding: 0.4 });
@@ -2931,7 +3005,7 @@ function fromStrava(a) {
     id: a.id, name: a.name || 'Activity', sport: a.sport_type || a.type || 'Workout',
     start, end: start + elapsed * 1000, elapsed, moving: a.moving_time || 0, dist: a.distance || 0,
     climb: a.total_elevation_gain || 0, line: a.map && a.map.summary_polyline ? decodePolyline(a.map.summary_polyline) : [],
-    url: `https://www.strava.com/activities/${a.id}`, photos: [],
+    url: `https://www.strava.com/activities/${a.id}`, photos: [], timed: [], src: 'api',
   };
 }
 
@@ -3006,7 +3080,8 @@ async function loadActivities(quiet) {
       renderStrava();
       if (batch.length < 200) break;
     }
-    setActivities(out, false);
+    // Activities from an export keep their timed tracks.
+    setActivities(mergeActs(out, ACT.demo ? [] : ACT.list.filter(a => a.src === 'export')), false);
     applyFilters(false);
     const n = ACT.list.filter(a => a.photos.length).length;
     if (!quiet) toast(`${fmt(out.length)} Strava activities on the map` + (n ? `, ${fmt(n)} with photos.` : '.'), 7000);
@@ -3087,7 +3162,7 @@ function stravaDisconnect() {
   ST.state = 'idle';
   store.set('strava-tokens', '');
   if (tok) fetch('https://www.strava.com/oauth/deauthorize', { method: 'POST', body: new URLSearchParams({ access_token: tok }) }).catch(() => {});
-  if (!ACT.demo) { ACT.selected = null; setActivities([], false); applyFilters(false); }
+  if (!ACT.demo) { ACT.selected = null; setActivities(ACT.list.filter(a => a.src === 'export'), false); applyFilters(false); }
   renderStrava();
 }
 
@@ -3128,17 +3203,45 @@ function renderStrava() {
   if ($('#strava').hidden) return;
   const link = (href, text) => `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
   const err = ST.error ? `<p class="err">${esc(ST.error)}</p>` : '';
+  const toExport = '<button class="linkbtn" id="sv-export" type="button">Import a Strava export instead</button>';
+  if (ST.mode !== 'api') {
+    const mine = ACT.demo ? [] : ACT.list.filter(a => a.src === 'export');
+    const toApi = '<button class="linkbtn" id="sv-api" type="button">Have a Strava subscription? Connect through the Strava API</button>';
+    if (mine.length) {
+      const withPhotos = mine.filter(a => a.photos.length).length;
+      const onTrack = S.placed.filter(p => p.fromTrack).length;
+      body.innerHTML = `
+        <p>${fmt(mine.length)} activities from your Strava export are on the map${withPhotos ? `, ${fmt(withPhotos)} of them with photos` : ''}.${onTrack ? ` ${fmt(onTrack)} ${onTrack === 1 ? 'photo' : 'photos'} without GPS got ${onTrack === 1 ? 'its' : 'their'} place from an activity's track.` : ''}</p>
+        ${err}
+        <div class="row"><button class="btn primary" id="sv-show" type="button">Show the activities</button><button class="btn" type="button" data-pick="zip">Add a newer export</button></div>
+        <div class="foot"><button class="linkbtn" id="sv-remove" type="button">Remove the activities</button>${toApi}</div>
+        <p class="fine">An export is a snapshot. For newer activities, request a new one from Strava. Nothing is kept once you close the page.</p>`;
+      return;
+    }
+    body.innerHTML = `
+      <p>Photo Atlas draws your runs, rides and hikes next to your photos and shows the photos you took during each one. It reads them from the data export that every Strava account can download for free.</p>
+      <ol class="steps">
+        <li><div><b>Request the export</b> at ${link('https://www.strava.com/athlete/delete_your_account', 'strava.com')}: Settings, My Account, "Download or Delete Your Account", then "Request Your Archive".<small>Despite the page's name, requesting the archive deletes nothing. Strava emails a download link, usually within a few hours.</small></div></li>
+        <li><div><b>Download the ZIP</b> from Strava's email. No need to unzip it.</div></li>
+        <li><div><b>Add it here</b>, or drop it anywhere on this page.<small>It is read on this computer; nothing is uploaded.</small></div></li>
+      </ol>
+      ${err}
+      <div class="row"><button class="btn primary" type="button" data-pick="zip">Choose the export ZIP</button><button class="btn" type="button" data-pick="folder">Choose the unzipped folder</button></div>
+      <div class="foot">${toApi}</div>`;
+    return;
+  }
   if (location.protocol === 'file:') {
     body.innerHTML = `
-      <p>Connecting Strava only works when Photo Atlas is opened from a web address, not as a file on this computer.</p>
-      <p>Open it at ${link(HOME_URL, esc(HOME_URL.replace(/^https:\/\//, '')))} instead.</p>`;
+      <p>Connecting through the Strava API only works when Photo Atlas is opened from a web address, not as a file on this computer.</p>
+      <p>Open it at ${link(HOME_URL, esc(HOME_URL.replace(/^https:\/\//, '')))} instead.</p>
+      <div class="foot">${toExport}</div>`;
     return;
   }
   if (!ST.clientId || !ST.secret || ST.editing) {
     const typed = ST.draft || { id: ST.clientId, secret: ST.secret };
     body.innerHTML = `
-      <p>Photo Atlas can draw your runs, rides and hikes from Strava next to your photos, and find the photos you took during each one.</p>
-      <p>For that, Strava wants you to register a small "API application" of your own. It's free and takes about five minutes:</p>
+      <p>With a Strava subscription, Photo Atlas can load your activities straight from Strava, and again by itself on every visit. Since June 2026 Strava only opens its API to subscribers.</p>
+      <p>Strava wants you to register a small "API application" of your own. It takes about five minutes:</p>
       <ol class="steps">
         <li><div><b>Open ${link(STRAVA_APPS, 'strava.com/settings/api')}</b> and create an application.<small>Any name, category and website will do. Strava also asks for an icon; any small picture works.</small></div></li>
         <li><div><b>Set "Authorization Callback Domain"</b> to <span class="origin">${esc(location.hostname)}</span></div></li>
@@ -3150,7 +3253,8 @@ function renderStrava() {
         <input id="sv-secret" type="password" autocomplete="off" spellcheck="false" value="${esc(typed.secret)}"></div>
       ${err}
       <div class="row"><button class="btn primary" id="sv-save" type="button">Save and continue</button>${ST.clientId && ST.secret ? '<button class="btn ghost" id="sv-cancel" type="button">Cancel</button>' : ''}</div>
-      <p class="fine">Both are kept in this browser only. Don't share the secret with anyone.</p>`;
+      <p class="fine">Both are kept in this browser only. Don't share the secret with anyone.</p>
+      <div class="foot">${toExport}</div>`;
     return;
   }
   if (!ST.tokens) {
@@ -3159,7 +3263,7 @@ function renderStrava() {
       <p>Connect your Strava account. Photo Atlas asks to read your activities, private ones included, and never changes anything on Strava.</p>
       ${err}
       <div class="row"><button class="btn strava" id="sv-connect" type="button"${waiting ? ' disabled' : ''}>${waiting ? 'Waiting for Strava…' : 'Connect with Strava'}</button></div>
-      <div class="foot"><button class="linkbtn" id="sv-edit" type="button">Change the app details</button></div>`;
+      <div class="foot"><button class="linkbtn" id="sv-edit" type="button">Change the app details</button>${toExport}</div>`;
     return;
   }
   if (ST.state === 'loading') {
@@ -3173,13 +3277,17 @@ function renderStrava() {
     <p>Connected${who}.${real ? ` ${fmt(real)} activities are on the map${withPhotos ? `, ${fmt(withPhotos)} of them with photos` : ''}.` : ''}</p>
     ${err}
     <div class="row">${real ? '<button class="btn primary" id="sv-show" type="button">Show the activities</button>' : ''}<button class="btn" id="sv-reload" type="button">Load them again</button></div>
-    <div class="foot"><button class="linkbtn" id="sv-disconnect" type="button">Disconnect Strava</button><button class="linkbtn" id="sv-edit" type="button">Change the app details</button></div>`;
+    <div class="foot"><button class="linkbtn" id="sv-disconnect" type="button">Disconnect Strava</button><button class="linkbtn" id="sv-edit" type="button">Change the app details</button>${toExport}</div>`;
 }
 
 $('#sv-body').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
+  if (b.dataset.pick) { $('#strava').hidden = true; $('#in-' + b.dataset.pick).click(); return; }
   const actions = {
+    'sv-api': () => { ST.mode = 'api'; ST.error = ''; renderStrava(); },
+    'sv-export': () => { ST.mode = 'export'; ST.error = ''; renderStrava(); },
+    'sv-remove': () => { ACT.selected = null; setActivities(ACT.list.filter(a => a.src !== 'export'), false); applyFilters(false); renderStrava(); },
     'sv-save': saveStravaApp,
     'sv-cancel': () => { ST.editing = false; ST.error = ''; ST.draft = null; renderStrava(); },
     'sv-edit': () => { ST.editing = true; ST.error = ''; ST.draft = null; renderStrava(); },
@@ -3193,6 +3301,234 @@ $('#sv-body').addEventListener('click', e => {
 $('#sv-body').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('#sv-id, #sv-secret')) saveStravaApp(); });
 $('#sv-close').addEventListener('click', () => { $('#strava').hidden = true; });
 $('#btn-strava').addEventListener('click', openStrava);
+
+/* ======================================================================
+   Strava's data export: activities.csv plus one FIT, GPX or TCX file per activity
+   ====================================================================== */
+
+const STRAVA_CSV_RE = /(^|\/)activities\.csv$/i;
+const STRAVA_FILE_RE = /\.(fit|gpx|tcx)(\.gz)?$/i;
+// FIT counts seconds from 31 December 1989 and stores positions as "semicircles".
+const FIT_EPOCH = 631065600;
+const SEMICIRCLE = 180 / 2 ** 31;
+const FIT_SPORTS = { 1: 'Run', 2: 'Ride', 5: 'Swim', 11: 'Walk', 12: 'NordicSki', 13: 'AlpineSki', 14: 'Snowboard', 15: 'Rowing', 17: 'Hike', 37: 'StandUpPaddling', 41: 'Kayaking' };
+// Tracks are thinned to this many points; the times stay, so photos can still be placed on them.
+const TRACK_POINTS = 400;
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = '', quoted = false;
+  for (let i = text.charCodeAt(0) === 0xfeff ? 1 : 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c !== '"') field += c;
+      else if (text[i + 1] === '"') { field += '"'; i++; }
+      else quoted = false;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+// Strava repeats some column names: the second "Elapsed Time" and "Distance" hold plain
+// seconds and metres, the first ones are formatted for reading.
+function stravaRows(rows) {
+  const head = (rows[0] || []).map(h => h.trim().toLowerCase());
+  const first = name => head.indexOf(name);
+  const last = name => head.lastIndexOf(name);
+  const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(',', '.')); return Number.isFinite(n) ? n : null; };
+  const col = {
+    id: first('activity id'), date: first('activity date'), name: first('activity name'), type: first('activity type'),
+    elapsed: last('elapsed time'), moving: last('moving time'), dist: last('distance'), climb: first('elevation gain'), file: first('filename'),
+  };
+  const distInKm = first('distance') === last('distance');
+  const get = (r, k) => (col[k] >= 0 ? r[col[k]] : '');
+  return rows.slice(1).filter(r => r.length > 1).map(r => ({
+    id: get(r, 'id').trim(), date: get(r, 'date'), name: get(r, 'name').trim(), sport: get(r, 'type').trim(), file: get(r, 'file').trim(),
+    elapsed: num(get(r, 'elapsed')), moving: num(get(r, 'moving')), climb: num(get(r, 'climb')),
+    dist: num(get(r, 'dist')) != null ? num(get(r, 'dist')) * (distInKm ? 1000 : 1) : null,
+  }));
+}
+
+// Just enough of the FIT format for tracks: record messages (20) with time and position,
+// and the session's sport (18). Handles compressed timestamps and developer fields.
+function parseFit(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (buf.length < 12 || String.fromCharCode(buf[8], buf[9], buf[10], buf[11]) !== '.FIT') throw new Error('not a FIT file');
+  const end = Math.min(buf.length, buf[0] + dv.getUint32(4, true));
+  const defs = [];
+  const pts = [];
+  let pos = buf[0], last = 0, start = null, stop = null, sport = null;
+  const read = (local, stamp) => {
+    const d = defs[local];
+    if (!d) throw new Error('broken FIT file');
+    let ts = stamp, lat = null, lng = null, kind = null;
+    for (const f of d.fields) {
+      if (f.num === 253 && f.size === 4) ts = dv.getUint32(pos, d.le);
+      else if (d.global === 20 && f.num === 0 && f.size === 4) lat = dv.getInt32(pos, d.le);
+      else if (d.global === 20 && f.num === 1 && f.size === 4) lng = dv.getInt32(pos, d.le);
+      else if (d.global === 18 && f.num === 5 && f.size === 1) kind = buf[pos];
+      pos += f.size;
+    }
+    pos += d.dev;
+    if (ts != null && ts !== 0xffffffff) last = ts;
+    if (d.global === 18 && kind != null) sport = FIT_SPORTS[kind] || sport;
+    if (d.global !== 20 || ts == null || ts === 0xffffffff) return;
+    const ms = (ts + FIT_EPOCH) * 1000;
+    if (start == null || ms < start) start = ms;
+    if (stop == null || ms > stop) stop = ms;
+    if (lat != null && lng != null && lat !== 0x7fffffff && lng !== 0x7fffffff) pts.push([lat * SEMICIRCLE, lng * SEMICIRCLE, ms]);
+  };
+  while (pos < end) {
+    const h = buf[pos++];
+    if (h & 0x80) {
+      const off = h & 0x1f;
+      let ts = (last & ~0x1f) + off;
+      if (off < (last & 0x1f)) ts += 0x20;
+      read((h >> 5) & 0x3, ts >>> 0);
+    } else if (h & 0x40) {
+      const le = buf[pos + 1] === 0;
+      const global = dv.getUint16(pos + 2, le);
+      const n = buf[pos + 4];
+      pos += 5;
+      const fields = [];
+      for (let i = 0; i < n; i++, pos += 3) fields.push({ num: buf[pos], size: buf[pos + 1] });
+      let dev = 0;
+      if (h & 0x20) {
+        const m = buf[pos++];
+        for (let i = 0; i < m; i++, pos += 3) dev += buf[pos + 1];
+      }
+      defs[h & 0x0f] = { le, global, fields, dev };
+    } else {
+      read(h & 0x0f, null);
+    }
+  }
+  return { pts, start, end: stop, sport };
+}
+
+function parseXmlTrack(text, point, latTag, lngTag, sportOf) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  const pts = [];
+  let start = null, stop = null;
+  for (const el of doc.getElementsByTagName(point)) {
+    const tEl = el.getElementsByTagName(point === 'trkpt' ? 'time' : 'Time')[0];
+    const ms = tEl ? Date.parse(tEl.textContent.trim()) : NaN;
+    if (Number.isFinite(ms)) {
+      if (start == null || ms < start) start = ms;
+      if (stop == null || ms > stop) stop = ms;
+    }
+    const lat = latTag ? parseFloat((el.getElementsByTagName(latTag)[0] || {}).textContent) : parseFloat(el.getAttribute('lat'));
+    const lng = lngTag ? parseFloat((el.getElementsByTagName(lngTag)[0] || {}).textContent) : parseFloat(el.getAttribute('lon'));
+    if (validGeo(lat, lng)) pts.push([lat, lng, Number.isFinite(ms) ? ms : null]);
+  }
+  return { pts, start, end: stop, sport: sportOf(doc) };
+}
+const parseGpx = text => parseXmlTrack(text, 'trkpt', null, null, doc => (doc.getElementsByTagName('type')[0] || {}).textContent || null);
+const parseTcx = text => parseXmlTrack(text, 'Trackpoint', 'LatitudeDegrees', 'LongitudeDegrees', doc => {
+  const a = doc.getElementsByTagName('Activity')[0];
+  return a ? a.getAttribute('Sport') : null;
+});
+
+async function readTrack(f) {
+  let blob = await f.blob();
+  let name = f.path.toLowerCase();
+  if (name.endsWith('.gz')) {
+    blob = await new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).blob();
+    name = name.slice(0, -3);
+  }
+  if (name.endsWith('.fit')) return parseFit(new Uint8Array(await blob.arrayBuffer()));
+  if (name.endsWith('.gpx')) return parseGpx(await blob.text());
+  if (name.endsWith('.tcx')) return parseTcx(await blob.text());
+  return null;
+}
+
+function metres(a, b) {
+  const r = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * r, dLng = (b[1] - a[1]) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLng / 2) ** 2;
+  return 12742000 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function fromExport(row, tr) {
+  const pts = tr ? tr.pts : [];
+  let dist = 0;
+  for (let i = 1; i < pts.length; i++) dist += metres(pts[i - 1], pts[i]);
+  const step = Math.max(1, Math.ceil(pts.length / TRACK_POINTS));
+  const kept = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+  // Strava writes the dates in activities.csv in UTC; a track's own times are better still.
+  let start = tr && tr.start != null ? tr.start : Date.parse(row.date + ' UTC');
+  if (!Number.isFinite(start)) start = Date.parse(row.date);
+  if (!Number.isFinite(start)) return null;
+  const elapsed = tr && tr.start != null && tr.end != null && tr.end > tr.start ? Math.round((tr.end - tr.start) / 1000) : Math.round(row.elapsed || 0);
+  const numeric = /^\d+$/.test(row.id);
+  return {
+    id: numeric ? +row.id : row.id || row.file || String(start), name: row.name || 'Activity', sport: row.sport || (tr && tr.sport) || 'Workout',
+    start, end: start + elapsed * 1000, elapsed, moving: Math.round(row.moving || 0), dist: dist > 0 ? dist : row.dist || 0, climb: row.climb || 0,
+    line: kept.map(p => [p[0], p[1]]), timed: kept.filter(p => p[2] != null), url: numeric ? `https://www.strava.com/activities/${row.id}` : null,
+    photos: [], src: 'export',
+  };
+}
+
+async function importStravaExports(sources) {
+  S.busy = true;
+  hideMenu();
+  $('#welcome').hidden = true;
+  $('#strava').hidden = true;
+  showProgress();
+  const acts = [];
+  const problems = [];
+  let broken = 0;
+  try {
+    for (const src of sources) {
+      progress(`Reading the activity list in ${src.name}`, 0, 0);
+      const csv = src.files.find(f => STRAVA_CSV_RE.test(f.path));
+      const rows = stravaRows(parseCsv(await (await csv.blob()).text()));
+      const byPath = new Map(src.files.map(f => [f.path.toLowerCase(), f]));
+      let done = 0;
+      await pool(rows, 4, async row => {
+        const f = row.file && byPath.get(row.file.toLowerCase());
+        let tr = null;
+        if (f) { try { tr = await readTrack(f); } catch (err) { broken++; } }
+        const a = fromExport(row, tr);
+        if (a) acts.push(a);
+        progress('Reading your Strava activities', ++done, rows.length);
+      });
+    }
+    if (!acts.length) {
+      problems.push('That Strava export holds no activities Photo Atlas could read.');
+    } else {
+      ACT.selected = null;
+      setActivities(mergeActs(ACT.demo ? [] : ACT.list, acts), false);
+      S.panel = 'acts';
+      applyFilters(false);
+      if (S.demo || !S.placed.length) {
+        const pts = ACT.list.flatMap(a => (a.bounds ? [a.bounds.getSouthWest(), a.bounds.getNorthEast()] : []));
+        if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [60, 60], maxZoom: 13 });
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    problems.push('The Strava export could not be read: ' + (err.message || err));
+  } finally {
+    S.busy = false;
+    $('#progress').hidden = true;
+  }
+  if (problems.length) { toast(problems.join(' '), 9000); return; }
+  const n = acts.filter(a => a.photos.length).length;
+  const moved = S.placed.filter(p => p.fromTrack).length;
+  toast(`${fmt(acts.length)} Strava activities on the map` + (n ? `, ${fmt(n)} with photos.` : '.')
+    + (moved ? ` ${fmt(moved)} ${moved === 1 ? 'photo' : 'photos'} without GPS got ${moved === 1 ? 'its' : 'their'} place from the track.` : '')
+    + (broken ? ` ${fmt(broken)} activity ${broken === 1 ? 'file' : 'files'} could not be read.` : ''), 9000);
+  renderStrava();
+}
 
 /* ======================================================================
    Demo library (made-up photos, drawn on the fly)
@@ -3347,7 +3683,7 @@ function loadDemo() {
     }
     return {
       id: -(k + 1), name: spec.name, sport: spec.sport, start, end: start + dur, elapsed: spec.min * 60,
-      moving: Math.round(spec.min * 60 * 0.87), dist: spec.km * 1000, climb: spec.climb || 0, line, url: null, photos: [],
+      moving: Math.round(spec.min * 60 * 0.87), dist: spec.km * 1000, climb: spec.climb || 0, line, url: null, photos: [], timed: [], src: 'demo',
     };
   });
   S.demo = true;

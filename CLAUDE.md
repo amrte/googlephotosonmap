@@ -1,6 +1,6 @@
 # Photo Atlas: notes for working on the code
 
-The whole app is one file, `photoatlas_v0.1.html` (HTML, CSS and JS; no build
+The whole app is one file, `photoatlas_v0.2.html` (HTML, CSS and JS; no build
 step, no framework). `index.html` only forwards to it, so
 https://amrte.github.io/googlephotosonmap/ always opens the current release.
 GitHub Pages publishes the branch `claude/happy-keller-e6p3g4`.
@@ -38,12 +38,17 @@ deployment" run).
 - Google Drive and Strava need the page served over https (or localhost), never
   `file://`; the dialogs say so.
 - Photos are records in `S.placed` / `S.unplaced`; after anything changes
-  them, `matchActivities()` links them to Strava activities again, then
-  `applyFilters()` redraws map, timeline, stats and panel.
+  them, `matchActivities()` links them to Strava activities again (and places
+  photos without GPS on timed export tracks, moving them between the two
+  lists), then `applyFilters()` redraws map, timeline, stats and panel.
+- Strava has two routes. The free data export (activities.csv plus FIT, GPX
+  and TCX files) is the main one and works offline; the API needs a Strava
+  subscription since June 2026. Activities carry `src` ('export', 'api',
+  'demo') and are merged by id, the export winning.
 
 ## Testing
 
-Before every release, all three browser tests must pass:
+Before every release, all the browser tests must pass:
 
 ```
 cd tests && npm install && python3 make_fixture.py && npm test

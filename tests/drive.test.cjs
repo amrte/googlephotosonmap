@@ -11,8 +11,10 @@ const GIS = `window.__tok = 0; window.google = { accounts: { oauth2: {
 const ZIPS = {
   z1: fs.readFileSync(path.join(FX, 'takeout-20250101T000000Z-001.zip')),
   z2: fs.readFileSync(path.join(FX, 'takeout-20250101T000000Z-002.zip')),
+  sx: fs.readFileSync(path.join(FX, 'strava-export.zip')),
 };
-const stats = { ranges: 0, bytes: 0, refused: 0 };
+ZIPS.hz = ZIPS.z2;
+const stats = { ranges: 0, bytes: 0, refused: 0, byFile: {} };
 let refuse = null;
 
 async function drive(route, url) {
@@ -29,6 +31,8 @@ async function drive(route, url) {
       { id: 'z2', name: 'takeout-20250101T000000Z-002.zip', size: String(ZIPS.z2.length), createdTime: '2025-01-01T01:00:00Z' },
       { id: 'old', name: 'takeout-20240301T101500Z-001.zip', size: '5300000000', createdTime: '2024-03-01T12:00:00Z' },
       { id: 'txt', name: 'takeout notes.txt', size: '10', createdTime: '2024-03-01T12:00:00Z' },
+      { id: 'sx', name: 'export_4711.zip', size: String(ZIPS.sx.length), createdTime: '2026-09-20T10:00:00Z', mimeType: 'application/zip' },
+      { id: 'hz', name: 'holiday.zip', size: String(ZIPS.hz.length), createdTime: '2026-08-01T10:00:00Z', mimeType: 'application/zip' },
     ];
     await route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({ files }) });
     return true;
@@ -39,6 +43,8 @@ async function drive(route, url) {
   const a = +m[1], b = Math.min(+m[2], buf.length - 1);
   stats.ranges++;
   stats.bytes += b - a + 1;
+  const id = decodeURIComponent(u.pathname.split('/').pop());
+  stats.byFile[id] = (stats.byFile[id] || 0) + b - a + 1;
   await route.fulfill({ status: 206, headers: { ...cors, 'content-range': `bytes ${a}-${b}/${buf.length}` }, body: buf.subarray(a, b + 1) });
   return true;
 }
@@ -73,11 +79,14 @@ async function drive(route, url) {
   await page.click('#dv-signin');
   await page.waitForSelector('.dv-row');
   const rows = await page.$$eval('.dv-row', rs => rs.map(r => r.innerText.replace(/\s+/g, ' ')));
-  t.check('exports are grouped by date, newest first', rows.length === 2 && /1 January 2025 2 files/.test(rows[0]) && /1 March 2024 1 file · 5\.3 GB/.test(rows[1]), rows);
+  t.check('exports are grouped and dated, newest first; other ZIPs come last', rows.length === 4
+    && /^Strava export export_4711\.zip · saved 20 September 2026/.test(rows[0])
+    && /^Google Photos export of 1 January 2025 2 files/.test(rows[1]) && /1 March 2024 1 file · 5\.3 GB/.test(rows[2])
+    && /^holiday\.zip saved 1 August 2026 .* Open$/.test(rows[3]), rows);
   t.check('sign-in used the new client ID', await page.evaluate(() => window.__cfg.client_id) === '123456789012-abcdef123.apps.googleusercontent.com');
   await shot(page, 'drive-1-exports');
 
-  await page.click('.dv-row button[data-export="0"]');
+  await page.click('.dv-row button[data-export="1"]');
   await page.waitForFunction(() => !S.busy && S.items.length > 0, null, { timeout: 30000 });
   await page.waitForTimeout(2500);
   const r = await page.evaluate(() => ({
@@ -132,6 +141,23 @@ async function drive(route, url) {
   await page.waitForSelector('#lb-media > img', { timeout: 10000 });
   t.check('after signing in again the photo loads', await page.evaluate(() => document.querySelector('#reauth').hidden && window.__tok === 2));
   await page.keyboard.press('Escape');
+
+  // A Strava export kept in Drive, opened from the Strava dialog.
+  await page.click('#btn-strava');
+  await page.click('#sv-drive');
+  await page.waitForSelector('.dv-row button[data-export="0"]:not([disabled])');
+  await page.click('.dv-row button[data-export="0"]');
+  await page.waitForFunction(() => ACT.list.length === 5 && !S.busy, null, { timeout: 30000 });
+  const sx = await page.evaluate(() => ({
+    photos: Object.fromEntries(ACT.list.map(a => [a.id, a.photos.map(p => p.name)])), src: [...new Set(ACT.list.map(a => a.src))],
+    two: (S.placed.find(p => p.name === 'IMG_0002.jpg') || {}).fromTrack === true, toast: document.querySelector('#toast').textContent,
+  }));
+  t.check('a Strava export on Drive: activities matched to the photos, a photo placed on its track', same(sx.photos, {
+    201: ['IMG_0001-edited.jpg'], 202: ['IMG_0003.jpg'], 203: ['DSC_0100.jpg'], 204: [], 205: ['IMG_0002.jpg'],
+  }) && same(sx.src, ['export']) && sx.two, sx);
+  // The export's media folder holds a 300 KB video; only the directory, the list and the tracks are fetched.
+  t.check('the Strava export\'s media stay on Drive', stats.byFile.sx < ZIPS.sx.length / 2, { fetched: stats.byFile.sx, size: ZIPS.sx.length });
+  await shot(page, 'drive-2-strava');
 
   t.check('no script errors', !errors.length, errors);
   await browser.close();

@@ -169,6 +169,8 @@ strava = {
     # Compressed timestamps from minute 20 on, every 30 seconds.
     'activities/205.fit': fit_file(S_LATE, along(38.72, -9.15, 1140, 60) + along(38.72, -9.15, 1800, 30)[39:], compressed_from=1170, sport=11),
     'media/strava-upload.jpg': jpg((10, 10, 10), 'photo uploaded to Strava', gps=(10.0, 10.0)),
+    # A stand-in for the videos in real exports: large, and never to be fetched from Drive.
+    'media/strava-upload.mp4': __import__('random').Random(4711).randbytes(300000),
     'profile.csv': b'Athlete ID,Email\n1,someone@example.com\n',
 }
 head = ['Activity ID', 'Activity Date', 'Activity Name', 'Activity Type', 'Activity Description', 'Elapsed Time', 'Distance',

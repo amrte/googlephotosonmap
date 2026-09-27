@@ -6,7 +6,7 @@ where it was taken. Add your Strava activities and your runs, rides and hikes
 appear too, each with the photos you took along the way.
 
 It lives at <https://amrte.github.io/googlephotosonmap/>. The current release is
-`photoatlas_v0.2.html`.
+`photoatlas_v0.3.html`.
 
 Nothing is uploaded. The browser reads your files on your own computer; only the
 map background and the page's libraries come from the internet.
@@ -23,7 +23,7 @@ reads.
 ## Getting started
 
 1. Open <https://amrte.github.io/googlephotosonmap/> in Chrome, Edge, Firefox
-   or Safari. You can also download `photoatlas_v0.2.html` and double-click it;
+   or Safari. You can also download `photoatlas_v0.3.html` and double-click it;
    everything except Google Drive and Strava works that way too.
 2. Go to [takeout.google.com](https://takeout.google.com/), click
    **Deselect all**, tick **Google Photos**, then **Next step**. Choose the
@@ -69,7 +69,8 @@ described under [Google Drive setup](#google-drive-setup).
 
 - Takeout ZIP files, read directly without unpacking. A 50 GB export works
   because photos are read out of the archive one at a time.
-- Takeout ZIP files on Google Drive, read in place after signing in with Google.
+- Takeout ZIP files and Strava exports on Google Drive, read in place after
+  signing in with Google.
 - Unzipped Takeout folders, and ordinary folders of photos.
 - Google's metadata files in every naming style Takeout has used
   (`IMG_1.jpg.json`, `IMG_1.jpg.supplemental-metadata.json`, names Google cut
@@ -110,9 +111,11 @@ described under [Google Drive setup](#google-drive-setup).
 ## Google Drive setup
 
 When Takeout saves your export to Google Drive, Photo Atlas can read it there
-after you sign in with Google, without downloading the ZIP files. It asks for
-read-only access and reads the files in your browser; nothing goes anywhere
-else.
+after you sign in with Google, without downloading the ZIP files. The same goes
+for a Strava export you saved to Drive (`export_….zip`). Other ZIP files are
+listed below those and can be opened too, in case one was renamed. Photo Atlas
+asks for read-only access and reads the files in your browser; nothing goes
+anywhere else.
 
 Google sign-in needs two things set up once: the page has to be online at a web
 address, and Google has to know about the app. That takes about 15 minutes and
@@ -160,7 +163,7 @@ costs nothing.
 
 The client ID isn't a secret; it only works from the addresses you listed.
 Photo Atlas keeps it in your browser. To avoid pasting it on every device, put
-it into `GOOGLE_CLIENT_ID` near the top of the script in `photoatlas_v0.2.html`.
+it into `GOOGLE_CLIENT_ID` near the top of the script in `photoatlas_v0.3.html`.
 
 Google signs you in for an hour at a time. If that runs out while you browse,
 Photo Atlas asks you to sign in again and carries on where it was.
@@ -179,7 +182,10 @@ To run it from your own computer instead of GitHub Pages, start
    link, usually within a few hours.
 2. Download the ZIP. No need to unzip it.
 3. In Photo Atlas click **Strava → Choose the export ZIP**, or simply drop the
-   ZIP on the page. An unzipped export folder works as well.
+   ZIP on the page. An unzipped export folder works as well. If you keep the
+   ZIP in Google Drive, click **Strava → From Google Drive** instead (this needs
+   the [Google Drive setup](#google-drive-setup)); only the activity list and
+   the GPS files are fetched, not the photos and videos in the archive.
 
 The export is read on your computer and works from the downloaded file too.
 Every activity's own GPS file has a time for each point, which is what lets

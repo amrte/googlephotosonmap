@@ -664,7 +664,8 @@
     border: 1px solid var(--line);
     border-radius: 10px;
   }
-  .dv-row b { font: 600 17px/1.25 var(--font-display); letter-spacing: 0.01em; }
+  .dv-row b { font: 600 17px/1.25 var(--font-display); letter-spacing: 0.01em; overflow-wrap: anywhere; }
+  .dv-sub { margin: 16px 0 -8px !important; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
   .dv-row small { grid-column: 1; font: 12.5px/1.4 var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
   .dv-row .btn { grid-column: 2; grid-row: 1 / span 2; }
   .dv-row .tag {
@@ -739,7 +740,7 @@
       <button type="button" data-pick="zip"><span class="t">Takeout ZIP files</span><span class="s">The .zip files Google emails you. Select all of them at once.</span></button>
       <button type="button" data-pick="folder"><span class="t">A folder</span><span class="s">An unzipped Takeout folder, or any folder of photos.</span></button>
       <button type="button" data-pick="files"><span class="t">Single photos</span><span class="s">Photos that carry GPS data in the file.</span></button>
-      <button type="button" data-pick="drive"><span class="t">From Google Drive</span><span class="s">Takeout files that Google saved to your Drive. Sign in with Google.</span></button>
+      <button type="button" data-pick="drive"><span class="t">From Google Drive</span><span class="s">Takeout or Strava exports saved in your Drive. Sign in with Google.</span></button>
       <hr>
       <button type="button" data-pick="reset"><span class="t">Start over</span><span class="s">Clear the map and everything loaded.</span></button>
     </div>
@@ -796,7 +797,7 @@
         <button class="btn ghost icon-btn x" id="dv-close" type="button" aria-label="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
-        <h1 id="dv-title">Photos from Google Drive</h1>
+        <h1 id="dv-title">From Google Drive</h1>
         <div id="dv-body"></div>
       </div>
     </div>
@@ -915,7 +916,7 @@ const HEAD_DEVICE = 49152;
 const HEAD_PREVIEW = 65536;
 
 // Release number; tools/bump.py raises it by 0.1 together with the file name.
-const VERSION = '0.2';
+const VERSION = '0.3';
 
 // Strava. Everyone registers their own small API application (see README); its ID and
 // secret stay in this browser.
@@ -2665,10 +2666,14 @@ async function remoteHead(f, e, n) {
   return remoteBlob(f, e, '');
 }
 
-async function driveZipItems(f) {
+async function driveEntries(f) {
   if (!DriveZipReader) throw new Error('the ZIP reader did not load. Check your connection and reload the page');
+  return new zip.ZipReader(new DriveZipReader({ id: f.id, size: Number(f.size), name: f.name })).getEntries();
+}
+
+async function driveZipItems(f, entries) {
   const src = { id: f.id, size: Number(f.size), name: f.name };
-  const entries = await new zip.ZipReader(new DriveZipReader(src)).getEntries();
+  if (!entries) entries = await driveEntries(f);
   const out = [];
   for (const e of entries) {
     if (e.directory) continue;
@@ -2692,7 +2697,9 @@ function stampDate(s) {
   return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : 0;
 }
 
-// Takeout names its files takeout-<export time>-001.zip, -002.zip, ...; one export per time stamp.
+// Takeout names its files takeout-<export time>-001.zip, -002.zip, ...; one export per time
+// stamp. Strava calls its archive export_<athlete id>.zip. Any other ZIP is listed too, in case
+// one of them was renamed; opening it finds out what it holds.
 async function listExports() {
   D.state = 'listing';
   D.error = '';
@@ -2702,8 +2709,8 @@ async function listExports() {
     let pageToken = '';
     do {
       const q = new URLSearchParams({
-        q: "name contains 'takeout' and trashed = false",
-        fields: 'nextPageToken, files(id, name, size, createdTime)', pageSize: '1000', spaces: 'drive',
+        q: "trashed = false and (name contains 'takeout' or mimeType = 'application/zip' or mimeType = 'application/x-zip-compressed')",
+        fields: 'nextPageToken, files(id, name, size, createdTime, mimeType)', pageSize: '1000', spaces: 'drive',
       });
       if (pageToken) q.set('pageToken', pageToken);
       const res = await driveFetch(`${DRIVE_API}/files?${q}`);
@@ -2717,8 +2724,9 @@ async function listExports() {
     for (const f of files) {
       if (!/\.zip$/i.test(f.name) || !(Number(f.size) > 0)) continue;
       const m = /takeout-(\d{8}T\d{6}Z)/i.exec(f.name);
-      const key = m ? m[1] : f.name;
-      if (!groups.has(key)) groups.set(key, { key, files: [], when: m ? stampDate(m[1]) : Date.parse(f.createdTime) || 0 });
+      const kind = m ? 'takeout' : /^export_\d+|strava/i.test(f.name) ? 'strava' : 'zip';
+      const key = m ? m[1] : f.id;
+      if (!groups.has(key)) groups.set(key, { key, kind, files: [], when: m ? stampDate(m[1]) : Date.parse(f.createdTime) || 0 });
       groups.get(key).files.push(f);
     }
     D.exports = [...groups.values()].sort((a, b) => b.when - a.when);
@@ -2758,35 +2766,44 @@ function renderDrive() {
   if (!D.tok) {
     const ready = gisReady();
     body.innerHTML = `
-      <p>Sign in so Photo Atlas can find the Takeout export in your Drive. It asks for read-only access: it can't change or delete anything, and your files are read by this browser only.</p>
+      <p>Sign in so Photo Atlas can find your exports in Drive: Google Photos from Takeout, and Strava's. It asks for read-only access: it can't change or delete anything, and your files are read by this browser only.</p>
       <p>Google will warn that it "hasn't verified this app". That is expected for an app you set up yourself; choose "Continue".</p>
       ${err}
       <div class="row"><button class="btn primary" id="dv-signin" type="button"${ready && !D.signingIn ? '' : ' disabled'}>${!ready ? 'Connecting to Google…' : D.signingIn ? 'Waiting for Google…' : 'Sign in with Google'}</button></div>
       <div class="foot"><button class="linkbtn" id="dv-edit" type="button">Change the client ID</button></div>`;
     return;
   }
-  if (D.state === 'listing') { body.innerHTML = '<p>Looking for Takeout files in your Drive…</p>'; return; }
+  if (D.state === 'listing') { body.innerHTML = '<p>Looking for exports in your Drive…</p>'; return; }
   if (D.state === 'error') {
     body.innerHTML = `${err}<p>If it mentions the Google Drive API, turn that API on in your Google Cloud project, wait a minute and try again.</p>
       <div class="row"><button class="btn primary" id="dv-retry" type="button">Try again</button></div>
       <div class="foot"><button class="linkbtn" id="dv-signout" type="button">Sign out</button></div>`;
     return;
   }
-  const list = D.exports || [];
+  const all = D.exports || [];
+  const main = all.filter(g => g.kind !== 'zip');
+  const other = all.filter(g => g.kind === 'zip').slice(0, 30);
+  D.rows = main.concat(other);
   const last = store.get('last-export');
-  const rows = list.map((g, i) => {
+  const row = (g, i) => {
     const size = g.files.reduce((n, f) => n + Number(f.size), 0);
     const on = D.loaded.has(g.key);
     const tag = on ? '<span class="tag">On the map</span>' : g.key === last ? '<span class="tag">Opened last time</span>' : '';
-    const title = g.when ? 'Export of ' + dfLong.format(g.when).replace(/^\w+ /, '') : esc(g.files[0].name);
-    return `<div class="dv-row"><b>${title}${tag}</b><small>${g.files.length} ${g.files.length === 1 ? 'file' : 'files'} · ${fmtBytes(size)}</small>
-      <button class="btn${on ? '' : ' primary'}" type="button" data-export="${i}"${on ? ' disabled' : ''}>${on ? 'Added' : 'Put on the map'}</button></div>`;
-  }).join('');
-  body.innerHTML = (list.length
-    ? `<p>Pick the export to put on the map. Photo Atlas reads it straight from Drive and fetches only the parts it shows.</p><div class="dv-list">${rows}</div>`
-    : `<p>There are no Takeout ZIP files in your Drive yet.</p>
-       <p>Create an export at ${link('https://takeout.google.com/', 'takeout.google.com')} with only Google Photos ticked, "Add to Drive" as the destination and ".zip" as the file type. When Google has finished, the files appear in a Takeout folder in your Drive, and here.</p>`
-      + (D.tgz ? '<p>Your Drive has Takeout files in .tgz format. Photo Atlas needs .zip; choose that file type for the next export.</p>' : ''))
+    const day = g.when ? dfLong.format(g.when).replace(/^\w+ /, '') : '';
+    const name = esc(g.files[0].name);
+    const [title, sub] = g.kind === 'takeout' ? [`Google Photos export of ${day}`, `${g.files.length} ${g.files.length === 1 ? 'file' : 'files'} · ${fmtBytes(size)}`]
+      : g.kind === 'strava' ? ['Strava export', `${name} · saved ${day} · ${fmtBytes(size)}`]
+      : [name, `saved ${day} · ${fmtBytes(size)}`];
+    return `<div class="dv-row"><b>${title}${tag}</b><small>${sub}</small>
+      <button class="btn${on || g.kind === 'zip' ? '' : ' primary'}" type="button" data-export="${i}"${on ? ' disabled' : ''}>${on ? 'Added' : g.kind === 'zip' ? 'Open' : 'Put on the map'}</button></div>`;
+  };
+  body.innerHTML = (D.rows.length
+    ? '<p>Pick what to put on the map: a Google Photos export from Takeout, or a Strava export. Photo Atlas reads it straight from Drive and fetches only the parts it needs.</p>'
+      + (main.length ? `<div class="dv-list">${main.map((g, i) => row(g, i)).join('')}</div>` : '<p>None of the ZIP files is named like a Takeout or Strava export.</p>')
+      + (other.length ? `<p class="dv-sub">Other ZIP files</p><div class="dv-list">${other.map((g, i) => row(g, main.length + i)).join('')}</div>` : '')
+    : `<p>There are no Takeout or Strava export ZIP files in your Drive yet.</p>
+       <p>For your photos, create an export at ${link('https://takeout.google.com/', 'takeout.google.com')} with only Google Photos ticked, "Add to Drive" as the destination and ".zip" as the file type. For Strava, save the ZIP from Strava's email to your Drive. Either one then shows up here.</p>`)
+    + (D.tgz ? '<p>Your Drive has Takeout files in .tgz format. Photo Atlas needs .zip; choose that file type for the next export.</p>' : '')
     + `<div class="foot"><span>Signed in with Google</span><button class="linkbtn" id="dv-refresh" type="button">Look again</button><button class="linkbtn" id="dv-signout" type="button">Sign out</button></div>`;
 }
 
@@ -2831,16 +2848,39 @@ function signOut() {
 }
 
 function addDriveExport(g) {
+  if (S.busy) return;
   D.loaded.add(g.key);
   store.set('last-export', g.key);
   $('#drive').hidden = true;
-  addSources(g.files.map(f => ({ name: f.name, remote: true, open: () => driveZipItems(f) })), []);
+  if (g.kind === 'takeout') addSources(g.files.map(f => ({ name: f.name, remote: true, open: () => driveZipItems(f) })), []);
+  else openDriveZip(g.files[0]);
+}
+
+// A single ZIP on Drive: a Strava export when it holds activities.csv, photos otherwise. Of a
+// Strava export only the list and the activity files are fetched, not its photos and videos.
+async function openDriveZip(f) {
+  showProgress();
+  progress(`Opening ${f.name} on Google Drive`, 0, 0);
+  let entries;
+  try {
+    entries = await driveEntries(f);
+  } catch (err) {
+    $('#progress').hidden = true;
+    toast(`${f.name} could not be opened (${err.message || err}).`, 9000);
+    return;
+  }
+  const csv = entries.find(e => STRAVA_CSV_RE.test(e.filename));
+  if (!csv) { addSources([{ name: f.name, remote: true, open: () => driveZipItems(f, entries) }], []); return; }
+  const src = { id: f.id, size: Number(f.size), name: f.name };
+  const root = csv.filename.slice(0, csv.filename.length - 'activities.csv'.length);
+  const files = entries.filter(e => !e.directory && (e === csv || (e.filename.startsWith(root + 'activities/') && STRAVA_FILE_RE.test(e.filename))));
+  await importStravaExports([{ name: f.name, remote: true, files: files.map(e => ({ path: e.filename.slice(root.length), blob: () => remoteBlob(src, e, '') })) }]);
 }
 
 $('#dv-body').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
-  if (b.dataset.export != null) { addDriveExport(D.exports[+b.dataset.export]); return; }
+  if (b.dataset.export != null) { addDriveExport(D.rows[+b.dataset.export]); return; }
   const actions = {
     'dv-save': saveClientId,
     'dv-cancel': () => { D.editing = false; D.error = ''; D.draft = null; renderDrive(); },
@@ -3213,7 +3253,7 @@ function renderStrava() {
       body.innerHTML = `
         <p>${fmt(mine.length)} activities from your Strava export are on the map${withPhotos ? `, ${fmt(withPhotos)} of them with photos` : ''}.${onTrack ? ` ${fmt(onTrack)} ${onTrack === 1 ? 'photo' : 'photos'} without GPS got ${onTrack === 1 ? 'its' : 'their'} place from an activity's track.` : ''}</p>
         ${err}
-        <div class="row"><button class="btn primary" id="sv-show" type="button">Show the activities</button><button class="btn" type="button" data-pick="zip">Add a newer export</button></div>
+        <div class="row"><button class="btn primary" id="sv-show" type="button">Show the activities</button><button class="btn" type="button" data-pick="zip">Add a newer export</button><button class="btn" id="sv-drive" type="button">From Google Drive</button></div>
         <div class="foot"><button class="linkbtn" id="sv-remove" type="button">Remove the activities</button>${toApi}</div>
         <p class="fine">An export is a snapshot. For newer activities, request a new one from Strava. Nothing is kept once you close the page.</p>`;
       return;
@@ -3222,11 +3262,11 @@ function renderStrava() {
       <p>Photo Atlas draws your runs, rides and hikes next to your photos and shows the photos you took during each one. It reads them from the data export that every Strava account can download for free.</p>
       <ol class="steps">
         <li><div><b>Request the export</b> at ${link('https://www.strava.com/athlete/delete_your_account', 'strava.com')}: Settings, My Account, "Download or Delete Your Account", then "Request Your Archive".<small>Despite the page's name, requesting the archive deletes nothing. Strava emails a download link, usually within a few hours.</small></div></li>
-        <li><div><b>Download the ZIP</b> from Strava's email. No need to unzip it.</div></li>
+        <li><div><b>Download the ZIP</b> from Strava's email. No need to unzip it.<small>Or keep it in Google Drive and open it from there.</small></div></li>
         <li><div><b>Add it here</b>, or drop it anywhere on this page.<small>It is read on this computer; nothing is uploaded.</small></div></li>
       </ol>
       ${err}
-      <div class="row"><button class="btn primary" type="button" data-pick="zip">Choose the export ZIP</button><button class="btn" type="button" data-pick="folder">Choose the unzipped folder</button></div>
+      <div class="row"><button class="btn primary" type="button" data-pick="zip">Choose the export ZIP</button><button class="btn" type="button" data-pick="folder">Choose the unzipped folder</button><button class="btn" id="sv-drive" type="button">From Google Drive</button></div>
       <div class="foot">${toApi}</div>`;
     return;
   }
@@ -3286,6 +3326,7 @@ $('#sv-body').addEventListener('click', e => {
   if (b.dataset.pick) { $('#strava').hidden = true; $('#in-' + b.dataset.pick).click(); return; }
   const actions = {
     'sv-api': () => { ST.mode = 'api'; ST.error = ''; renderStrava(); },
+    'sv-drive': () => { $('#strava').hidden = true; openDrive(); },
     'sv-export': () => { ST.mode = 'export'; ST.error = ''; renderStrava(); },
     'sv-remove': () => { ACT.selected = null; setActivities(ACT.list.filter(a => a.src !== 'export'), false); applyFilters(false); renderStrava(); },
     'sv-save': saveStravaApp,
@@ -3493,7 +3534,7 @@ async function importStravaExports(sources) {
       const rows = stravaRows(parseCsv(await (await csv.blob()).text()));
       const byPath = new Map(src.files.map(f => [f.path.toLowerCase(), f]));
       let done = 0;
-      await pool(rows, 4, async row => {
+      await pool(rows, src.remote ? 8 : 4, async row => {
         const f = row.file && byPath.get(row.file.toLowerCase());
         let tr = null;
         if (f) { try { tr = await readTrack(f); } catch (err) { broken++; } }

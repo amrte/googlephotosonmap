@@ -1,6 +1,6 @@
 # Photo Atlas: notes for working on the code
 
-The whole app is one file, `photoatlas_v0.2.html` (HTML, CSS and JS; no build
+The whole app is one file, `photoatlas_v0.3.html` (HTML, CSS and JS; no build
 step, no framework). `index.html` only forwards to it, so
 https://amrte.github.io/googlephotosonmap/ always opens the current release.
 GitHub Pages publishes the branch `claude/happy-keller-e6p3g4`.

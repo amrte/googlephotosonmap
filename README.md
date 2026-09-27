@@ -30,6 +30,11 @@ reads.
 The page opens with a made-up demo library so you can try it out first. Adding
 your own photos replaces it.
 
+If you'd rather not download the export, choose **Add to Drive** as the
+destination in Takeout. Photo Atlas can then read the ZIP files straight from
+your Google Drive after you sign in with Google; that needs a one-time setup,
+described under [Google Drive setup](#google-drive-setup).
+
 ## What you can do
 
 - **Map.** Photos cluster into small stacks with a count. Zoom in and they split
@@ -51,6 +56,7 @@ your own photos replaces it.
 
 - Takeout ZIP files, read directly without unpacking. A 50 GB export works
   because photos are read out of the archive one at a time.
+- Takeout ZIP files on Google Drive, read in place after signing in with Google.
 - Unzipped Takeout folders, and ordinary folders of photos.
 - Google's metadata files in every naming style Takeout has used
   (`IMG_1.jpg.json`, `IMG_1.jpg.supplemental-metadata.json`, names Google cut
@@ -72,6 +78,71 @@ your own photos replaces it.
 - Browsers other than Safari have to convert HEIC photos themselves, which takes
   a moment per photo.
 - Very large libraries (100,000+ photos) need a computer with plenty of memory.
+- From Google Drive, each photo's details are a separate small download, so a big
+  library takes a few minutes to load. Thumbnails use the small preview stored
+  inside each photo, so they are a little softer, and videos get none. Device
+  names are only read when you ask, since that means a download per photo.
+
+## Google Drive setup
+
+When Takeout saves your export to Google Drive, Photo Atlas can read it there
+after you sign in with Google, without downloading the ZIP files. It asks for
+read-only access and reads the files in your browser; nothing goes anywhere
+else.
+
+Google sign-in needs two things set up once: the page has to be online at a web
+address, and Google has to know about the app. That takes about 15 minutes and
+costs nothing.
+
+### 1. Put Photo Atlas online with GitHub Pages
+
+1. On GitHub, open this repository, then **Settings → Pages**.
+2. Under **Build and deployment**, choose **Deploy from a branch**, pick the
+   branch `claude/happy-keller-e6p3g4` and the folder `/ (root)`, and click
+   **Save**.
+3. A minute or two later the page is at
+   <https://amrte.github.io/googlephotosonmap/>.
+
+### 2. Register Photo Atlas with Google
+
+1. Open the [Google Cloud console](https://console.cloud.google.com/) with the
+   Google account that holds your photos and create a new project, for example
+   "Photo Atlas".
+2. Turn on the
+   [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com)
+   for that project.
+3. Open [Google Auth Platform](https://console.cloud.google.com/auth/overview)
+   and click **Get started**. Name the app, choose your email as the support
+   address, pick **External** as the audience, add your email as the contact
+   and create it.
+4. Under **Audience**, add your own Google address as a **test user**. Leave
+   the app in testing; it doesn't need publishing.
+5. Under **Data Access**, add the scope `.../auth/drive.readonly` (search for
+   "drive.readonly") and save.
+6. Under **Clients**, create a client of type **Web application**. Under
+   **Authorized JavaScript origins** add `https://amrte.github.io` (no path, no
+   slash at the end). Create it and copy the **Client ID**, which ends in
+   `.apps.googleusercontent.com`.
+
+### 3. Sign in
+
+1. Open <https://amrte.github.io/googlephotosonmap/>, click
+   **Add photos → From Google Drive** and paste the client ID.
+2. Click **Sign in with Google**. Google warns that it hasn't verified the app,
+   which is expected for your own app in testing: choose **Continue** and allow
+   access to Drive.
+3. Pick the export and click **Put on the map**.
+
+The client ID isn't a secret; it only works from the addresses you listed.
+Photo Atlas keeps it in your browser. To avoid pasting it on every device, put
+it into `GOOGLE_CLIENT_ID` near the top of the script in `index.html`.
+
+Google signs you in for an hour at a time. If that runs out while you browse,
+Photo Atlas asks you to sign in again and carries on where it was.
+
+To run it from your own computer instead of GitHub Pages, start
+`python3 -m http.server 8000` in the folder with `index.html`, add
+`http://localhost:8000` as a second JavaScript origin and open that address.
 
 ## Built with
 

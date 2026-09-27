@@ -9,10 +9,12 @@ map background and the page's libraries come from the internet.
 
 ## Why Google Takeout
 
-Google doesn't let other apps read where your photos were taken. The Google
-Photos APIs leave the location out, and since 2025 they no longer let apps
-browse your whole library at all. Google Takeout is the one official way to get
-your photos together with their locations, so that is what Photo Atlas reads.
+Google doesn't let other apps read where your photos were taken. Since
+March 2025 its Photos API no longer lets apps browse your library at all. What
+remains after signing in with Google is a photo picker, and it removes the
+location from every photo it hands over. Google Takeout is the one official way
+to get your photos together with their locations, so that is what Photo Atlas
+reads.
 
 ## Getting started
 
@@ -36,6 +38,9 @@ your own photos replaces it.
 - **Timeline.** A bar per month shows when your photos were taken. Drag across
   it to show one period only.
 - **Albums.** Filter by any album from your library.
+- **Devices.** Filter by the phone or camera a photo was taken with. The names
+  come from each photo's EXIF data, which is read in the background after the
+  map appears.
 - **In this view.** The side panel lists every photo in the visible part of the
   map, grouped by month. Hovering one marks its spot on the map.
 - **Viewer.** Date, coordinates, album, people, description and camera, with
@@ -63,6 +68,7 @@ your own photos replaces it.
 ## Limits
 
 - An internet connection is needed for the map and the libraries.
+- Videos, screenshots and photos without EXIF data count as "Unknown device".
 - Browsers other than Safari have to convert HEIC photos themselves, which takes
   a moment per photo.
 - Very large libraries (100,000+ photos) need a computer with plenty of memory.

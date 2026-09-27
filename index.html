@@ -383,14 +383,21 @@
   /* ---------- Side panel ---------- */
   .panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--surface); border-left: 1px solid var(--line); }
   .p-head { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
-  .p-title { display: flex; align-items: baseline; gap: 10px; }
+  .p-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
   .p-title h2 { margin: 0; font: 700 19px/1.1 var(--font-display); letter-spacing: 0.01em; }
   .p-title .c { font: 12.5px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
-  .p-title .linkbtn { margin-left: auto; }
+  .p-title .sort {
+    margin-left: auto;
+    padding: 3px 6px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface-2);
+    font-size: 13px;
+  }
   .p-note { margin: 0; font-size: 13px; color: var(--muted); }
-  .p-ctl { display: flex; gap: 8px; }
+  .p-ctl { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
   .p-ctl select {
-    flex: 1;
+    width: 100%;
     min-width: 0;
     padding: 6px 8px;
     border: 1px solid var(--line);
@@ -398,6 +405,8 @@
     background: var(--surface-2);
     font-size: 13.5px;
   }
+  .p-ctl select.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .p-ctl select:disabled { color: var(--faint); cursor: progress; }
   .gridscroll { flex: 1; min-height: 0; overflow-y: auto; }
   .grid {
     display: grid;
@@ -623,15 +632,15 @@
       <div class="p-title">
         <h2 id="p-title">In this view</h2>
         <span class="c" id="p-count"></span>
-        <button class="linkbtn" id="p-back" type="button" hidden>Back to the map</button>
-      </div>
-      <p class="p-note" id="p-note" hidden>These have no GPS position, neither in Google's export nor in the file itself. They can't be placed on the map.</p>
-      <div class="p-ctl">
-        <select id="album" aria-label="Album"></select>
-        <select id="sort" aria-label="Sort order">
+        <select class="sort" id="sort" aria-label="Sort order">
           <option value="new">Newest first</option>
           <option value="old">Oldest first</option>
         </select>
+      </div>
+      <p class="p-note" id="p-note" hidden>These have no GPS position, neither in Google's export nor in the file itself, so they can't go on the map. <button class="linkbtn" id="p-back" type="button">Back to the map</button></p>
+      <div class="p-ctl" id="p-ctl">
+        <select id="album" aria-label="Filter by album"></select>
+        <select id="device" aria-label="Filter by camera or phone"></select>
       </div>
     </div>
     <div class="gridscroll" id="gridscroll"><div class="grid" id="grid"></div></div>
@@ -729,6 +738,23 @@ const YEAR_DIR_RE = /^(photos? from|fotos? von|fotos de|photos de|foto (?:dal|de
 const TRASH_RE = /^(trash|bin|papierkorb|corbeille|papelera|lixeira|cestino|prullenbak|kosz|papperskorgen|papirkurv)$/i;
 const SUPPLEMENTAL = 'supplemental-metadata';
 
+// EXIF brand names are written however each maker likes ("NIKON CORPORATION", "samsung").
+const MAKES = {
+  apple: 'Apple', google: 'Google', samsung: 'Samsung', sony: 'Sony', nikon: 'Nikon', canon: 'Canon', fujifilm: 'Fujifilm',
+  olympus: 'Olympus', panasonic: 'Panasonic', ricoh: 'Ricoh', pentax: 'Pentax', leica: 'Leica', huawei: 'Huawei',
+  xiaomi: 'Xiaomi', oneplus: 'OnePlus', motorola: 'Motorola', lge: 'LG', lg: 'LG', 'hmd global': 'Nokia', nokia: 'Nokia',
+  oppo: 'OPPO', dji: 'DJI', gopro: 'GoPro', kodak: 'Kodak', 'eastman kodak company': 'Kodak', asus: 'ASUS', htc: 'HTC',
+  'casio computer': 'Casio', casio: 'Casio', hasselblad: 'Hasselblad', sharp: 'Sharp', fairphone: 'Fairphone',
+};
+function deviceName(make, model) {
+  let mk = String(make || '').replace(/\0/g, '').trim();
+  let md = String(model || '').replace(/\0/g, '').trim();
+  mk = mk.replace(/\s+(corporation|corp\.?|imaging corp\.?|imaging company.*|co\.?,?\s*ltd\.?|inc\.?|electronics)$/i, '').trim();
+  mk = MAKES[mk.toLowerCase()] || mk;
+  if (mk && md.toLowerCase().startsWith(mk.toLowerCase())) md = md.slice(mk.length).trim();
+  return [mk, md].filter(Boolean).join(' ');
+}
+
 function kindOf(name) {
   const e = extOf(name);
   if (e === 'json') return 'json';
@@ -799,7 +825,7 @@ const S = {
   json: new Map(), exif: new Map(),
   placed: [], unplaced: [], byId: new Map(),
   filtered: [], unplacedFiltered: [],
-  album: '', range: null, draft: null, sort: 'new',
+  album: '', device: '', range: null, draft: null, sort: 'new', scan: null,
   panel: 'view', panelList: [], groupCounts: new Map(), shown: 0, lastGroup: null,
   demo: false, busy: false,
 };
@@ -936,15 +962,13 @@ async function exifOf(it) {
     try {
       const x = await exifr.parse(await it.blob(), EXIF_OPTS);
       if (x) {
-        const make = String(x.Make || '').trim();
-        const model = String(x.Model || '').trim();
         const ref = x.GPSAltitudeRef;
         const below = ref === 1 || (ref && ref[0] === 1);
         out = {
           lat: x.latitude, lng: x.longitude,
           alt: Number.isFinite(x.GPSAltitude) && x.GPSAltitude !== 0 ? x.GPSAltitude * (below ? -1 : 1) : null,
           t: toMs(x.DateTimeOriginal) ?? toMs(x.CreateDate),
-          camera: make && model.toLowerCase().startsWith(make.toLowerCase()) ? model : [make, model].filter(Boolean).join(' '),
+          camera: deviceName(x.Make, x.Model),
         };
       }
     } catch (err) { out = null; }
@@ -964,6 +988,7 @@ function setItem(r, it) {
 function newRecord(it, d) {
   const r = { albums: new Set(), lat: null, lng: null, alt: null, t: null, m: null, url: null, desc: '', people: [], camera: undefined, sidecar: !!d };
   setItem(r, it);
+  if (S.exif.has(it.key)) { const x = S.exif.get(it.key); r.camera = (x && x.camera) || null; }
   if (d) {
     r.t = d.t;
     r.url = d.url;
@@ -1058,10 +1083,14 @@ async function addFiles(list) {
       added++;
     }
     if (S.demo) S.demo = false;
+    scanGen++;
+    S.scan = null;
     progress('Matching photos with their details', 0, 0);
     result = await rebuild();
     refreshAlbums();
+    refreshDevices();
     applyFilters(true);
+    scanDevices();
     if (!added && !problems.length) problems.push('Those files are already on the map.');
   } catch (err) {
     console.error(err);
@@ -1338,8 +1367,15 @@ async function makeThumb(p) {
    Filters, timeline, stats
    ====================================================================== */
 
-function passes(p) {
+// Album and device narrow everything, the timeline included; the date range narrows the rest.
+function facetsMatch(p) {
   if (S.album && !p.albums.has(S.album)) return false;
+  if (S.device && (p.camera || '?') !== S.device) return false;
+  return true;
+}
+
+function passes(p) {
+  if (!facetsMatch(p)) return false;
   if (S.range && (p.m == null || p.m < S.range[0] || p.m > S.range[1])) return false;
   return true;
 }
@@ -1352,6 +1388,8 @@ function applyFilters(fit) {
   if (fit && S.filtered.length) {
     map.fitBounds(L.latLngBounds(S.filtered.map(p => [p.lat, p.lng])), { padding: [60, 60], maxZoom: 13 });
   }
+  $('#album').classList.toggle('on', !!S.album);
+  $('#device').classList.toggle('on', !!S.device);
   computeTimeline();
   renderStats();
   renderPanel();
@@ -1366,6 +1404,65 @@ function refreshAlbums() {
   sel.replaceChildren(new Option('All albums', ''), ...albums.map(([a, n]) => new Option(`${a} (${fmt(n)})`, a)));
   sel.value = S.album;
   sel.hidden = !albums.length;
+  syncFilterRow();
+}
+
+function syncFilterRow() {
+  $('#p-ctl').hidden = $('#album').hidden && $('#device').hidden;
+}
+
+function refreshDevices() {
+  const sel = $('#device');
+  const all = S.placed.concat(S.unplaced);
+  if (S.scan) {
+    const pct = S.scan.total ? Math.floor((100 * S.scan.done) / S.scan.total) : 0;
+    sel.replaceChildren(new Option(`Reading devices… ${pct}%`, ''));
+    sel.disabled = true;
+    sel.hidden = !all.length;
+    syncFilterRow();
+    return;
+  }
+  const counts = new Map();
+  for (const p of all) { const k = p.camera || '?'; counts.set(k, (counts.get(k) || 0) + 1); }
+  const known = [...counts].filter(([k]) => k !== '?').sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], LOCALE));
+  const opts = [new Option('All devices', ''), ...known.map(([k, n]) => new Option(`${k} (${fmt(n)})`, k))];
+  if (counts.has('?')) opts.push(new Option(`Unknown device (${fmt(counts.get('?'))})`, '?'));
+  if (S.device && !counts.has(S.device)) S.device = '';
+  sel.replaceChildren(...opts);
+  sel.value = S.device;
+  sel.disabled = false;
+  sel.hidden = !known.length;
+  syncFilterRow();
+}
+
+// The device sits in each photo's EXIF header. Reading it for a whole library takes a
+// while, so the map comes first and the device list fills in behind it.
+let scanGen = 0;
+async function scanDevices() {
+  const gen = ++scanGen;
+  const readable = [];
+  for (const p of S.placed.concat(S.unplaced)) {
+    if (p.camera !== undefined) continue;
+    if (p.kind === 'video' || !p.item) p.camera = null;
+    else readable.push(p);
+  }
+  S.scan = readable.length ? { done: 0, total: readable.length } : null;
+  refreshDevices();
+  if (!readable.length) return;
+  let shown = 0;
+  await pool(readable, readable.some(p => p.item.zipped) ? 2 : 6, async p => {
+    if (gen !== scanGen) return;
+    const x = await exifOf(p.item);
+    if (gen !== scanGen) return;
+    if (p.camera === undefined) p.camera = (x && x.camera) || null;
+    S.scan.done++;
+    const now = performance.now();
+    if (now - shown > 400) { shown = now; refreshDevices(); }
+  });
+  if (gen !== scanGen) return;
+  S.scan = null;
+  refreshDevices();
+  if (S.device) applyFilters(false);
 }
 
 function renderStats() {
@@ -1389,7 +1486,7 @@ function computeTimeline() {
   const counts = new Map();
   let lo = Infinity, hi = -Infinity;
   for (const p of S.placed) {
-    if (p.m == null || (S.album && !p.albums.has(S.album))) continue;
+    if (p.m == null || !facetsMatch(p)) continue;
     counts.set(p.m, (counts.get(p.m) || 0) + 1);
     if (p.m < lo) lo = p.m;
     if (p.m > hi) hi = p.m;
@@ -1579,7 +1676,6 @@ function renderPanel() {
   $('#p-title').textContent = unplaced ? 'Without location' : 'In this view';
   $('#p-count').textContent = `${fmt(list.length)} ${list.length === 1 ? 'photo' : 'photos'}`;
   $('#p-note').hidden = !unplaced;
-  $('#p-back').hidden = !unplaced;
   $('#chip-none').setAttribute('aria-pressed', String(unplaced));
   const empty = !list.length;
   gridScroll.hidden = empty;
@@ -1647,6 +1743,7 @@ grid.addEventListener('mouseover', e => {
 });
 grid.addEventListener('mouseleave', () => highlight.remove());
 $('#album').addEventListener('change', e => { S.album = e.target.value; applyFilters(false); });
+$('#device').addEventListener('change', e => { S.device = e.target.value; applyFilters(false); });
 $('#sort').addEventListener('change', e => { S.sort = e.target.value; renderPanel(); });
 $('#chip-none').addEventListener('click', () => { S.panel = S.panel === 'unplaced' ? 'view' : 'unplaced'; renderPanel(); });
 $('#p-back').addEventListener('click', () => { S.panel = 'view'; renderPanel(); });
@@ -1795,7 +1892,7 @@ function fillInfo(p) {
   add('Albums', [...p.albums]);
   add('People', p.people);
   add('Description', p.desc);
-  add('Camera', p.camera);
+  add('Device', p.camera);
   add('File', p.demo ? p.name + ' (demo)' : p.item.path, 'mono');
   $('#lb-dl').replaceChildren(...rows);
   const gp = $('#lb-gp');
@@ -1822,14 +1919,14 @@ $('#lb-show').addEventListener('click', () => {
    ====================================================================== */
 
 const DEMO_TRIPS = [
-  { place: 'Kyoto', album: 'Japan', lat: 35.0116, lng: 135.7681, y: 2019, mo: 3, n: 18, spread: 0.05, hue: 340 },
-  { place: 'Cape Town', album: 'South Africa', lat: -33.9249, lng: 18.4241, y: 2020, mo: 0, n: 10, spread: 0.1, hue: 18 },
-  { place: 'Iceland', album: 'Ring Road', lat: 64.6, lng: -19.5, y: 2021, mo: 5, n: 14, spread: 1.6, hue: 190 },
-  { place: 'Dolomites', album: 'Alta Via 1', lat: 46.55, lng: 12.02, y: 2022, mo: 7, n: 16, spread: 0.14, hue: 205 },
-  { place: 'Lisbon', album: 'Portugal long weekend', lat: 38.7139, lng: -9.1394, y: 2023, mo: 3, n: 14, spread: 0.035, hue: 28 },
-  { place: 'Munich', album: '', lat: 48.1374, lng: 11.5755, y: 2024, mo: 11, n: 12, spread: 0.04, hue: 45 },
-  { place: 'Torres del Paine', album: 'Patagonia', lat: -50.9423, lng: -73.1, y: 2025, mo: 1, n: 9, spread: 0.2, hue: 200 },
-  { place: 'New York', album: '', lat: 40.7306, lng: -73.9866, y: 2025, mo: 8, n: 12, spread: 0.035, hue: 222 },
+  { place: 'Kyoto', album: 'Japan', lat: 35.0116, lng: 135.7681, y: 2019, mo: 3, n: 18, spread: 0.05, hue: 340, cams: ['Apple iPhone 8', 'Sony ILCE-6000'] },
+  { place: 'Cape Town', album: 'South Africa', lat: -33.9249, lng: 18.4241, y: 2020, mo: 0, n: 10, spread: 0.1, hue: 18, cams: ['Apple iPhone 11'] },
+  { place: 'Iceland', album: 'Ring Road', lat: 64.6, lng: -19.5, y: 2021, mo: 5, n: 14, spread: 1.6, hue: 190, cams: ['Sony ILCE-7M3', 'Google Pixel 5'] },
+  { place: 'Dolomites', album: 'Alta Via 1', lat: 46.55, lng: 12.02, y: 2022, mo: 7, n: 16, spread: 0.14, hue: 205, cams: ['Google Pixel 6', 'GoPro HERO10 Black'] },
+  { place: 'Lisbon', album: 'Portugal long weekend', lat: 38.7139, lng: -9.1394, y: 2023, mo: 3, n: 14, spread: 0.035, hue: 28, cams: ['Google Pixel 7'] },
+  { place: 'Munich', album: '', lat: 48.1374, lng: 11.5755, y: 2024, mo: 11, n: 12, spread: 0.04, hue: 45, cams: ['Google Pixel 7'] },
+  { place: 'Torres del Paine', album: 'Patagonia', lat: -50.9423, lng: -73.1, y: 2025, mo: 1, n: 9, spread: 0.2, hue: 200, cams: ['Google Pixel 9 Pro', 'Sony ILCE-7M3'] },
+  { place: 'New York', album: '', lat: 40.7306, lng: -73.9866, y: 2025, mo: 8, n: 12, spread: 0.035, hue: 222, cams: ['Google Pixel 9 Pro'] },
 ];
 
 function rng(seed) {
@@ -1902,7 +1999,8 @@ function loadDemo() {
     const name = `PXL_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${pad(Math.floor(r() * 1000), 3)}.jpg`;
     return Object.assign({
       id: S.nextId++, item: null, kind: 'image', name, label: 'JPG', albums: new Set(trip.album ? [trip.album] : []),
-      lat: null, lng: null, alt: null, t, m: monthIdx(t), url: null, desc: '', people: [], camera: 'Google Pixel 7',
+      lat: null, lng: null, alt: null, t, m: monthIdx(t), url: null, desc: '', people: [],
+      camera: trip.cams ? trip.cams[Math.floor(r() * trip.cams.length)] : null,
       demo: { seed: Math.floor(r() * 1e9), hue: trip.hue, relief: trip.relief ?? 1 },
     }, extra);
   };
@@ -1932,6 +2030,7 @@ function loadDemo() {
   S.unplaced = photos.filter(p => p.lat == null);
   S.byId = new Map(photos.map(p => [p.id, p]));
   refreshAlbums();
+  refreshDevices();
   applyFilters(true);
 }
 
@@ -1944,12 +2043,16 @@ function startOver() {
   S.unplaced = [];
   S.byId = new Map();
   S.album = '';
+  S.device = '';
   S.range = null;
   S.panel = 'view';
   S.demo = false;
+  scanGen++;
+  S.scan = null;
   for (const url of thumbs.values()) if (url) URL.revokeObjectURL(url);
   thumbs.clear();
   refreshAlbums();
+  refreshDevices();
   applyFilters(false);
   map.setView([30, 10], 2);
   $('#w-demo').textContent = 'Explore the demo';
